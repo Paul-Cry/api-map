@@ -1,0 +1,12 @@
+{
+  "name": "avito-parser",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "C:\\Progra~1\\nodejs\\node.exe avito-parser.js"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}
