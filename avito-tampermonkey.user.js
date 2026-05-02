@@ -17,9 +17,12 @@
   const PROCESSED_KEY = 'codex_avito_collector_processed_urls';
   const LOGS_KEY = 'codex_avito_collector_logs';
   const SESSION_KEY = 'codex_avito_collector_session';
+  const AUTO_SCROLL_DURATION_MS = 12000;
+  const AUTO_SCROLL_STEP_MS = 400;
   let bootstrapStarted = false;
   let collectionInProgress = false;
   let navigationWatcher = null;
+  let autoPageAdvanceInProgress = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -211,6 +214,108 @@
     return false;
   }
 
+  function isElementVisible(element) {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+  }
+
+  function findNextPageElement() {
+    const selectors = [
+      'a[rel="next"]',
+      '[data-marker="pagination-button/next"]',
+      'button[aria-label*="следующ" i]',
+      'a[aria-label*="следующ" i]',
+      '[data-marker*="pagination"] a[href*="p="]',
+      '[data-marker*="pagination"] button',
+      'a[href*="p="]',
+      'button',
+      'a',
+    ];
+
+    for (const selector of selectors) {
+      const elements = Array.from(document.querySelectorAll(selector));
+      const matched = elements.find((element) => {
+        if (!isElementVisible(element)) return false;
+        const text = normalizeText(element.textContent).toLowerCase();
+        const aria = normalizeText(element.getAttribute('aria-label')).toLowerCase();
+        const title = normalizeText(element.getAttribute('title')).toLowerCase();
+        return (
+          text.includes('следующ') ||
+          aria.includes('следующ') ||
+          title.includes('следующ') ||
+          text === 'next' ||
+          aria === 'next'
+        );
+      });
+
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
+  }
+
+  async function scrollPageForPagination(durationMs = AUTO_SCROLL_DURATION_MS) {
+    const endAt = Date.now() + durationMs;
+    while (Date.now() < endAt) {
+      window.scrollBy({
+        top: Math.max(450, Math.floor(window.innerHeight * 0.85)),
+        left: 0,
+        behavior: 'smooth',
+      });
+      await sleep(AUTO_SCROLL_STEP_MS);
+    }
+  }
+
+  async function clickNextPage() {
+    const element = findNextPageElement();
+    if (!element) {
+      return false;
+    }
+
+    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+    await sleep(300);
+    element.click();
+    return true;
+  }
+
+  async function advanceToNextPage() {
+    if (autoPageAdvanceInProgress) {
+      return;
+    }
+
+    const session = getSession();
+    if (!session.running) {
+      return;
+    }
+
+    autoPageAdvanceInProgress = true;
+    try {
+      log(`Автопрокрутка страницы ${AUTO_SCROLL_DURATION_MS / 1000} секунд перед переходом дальше.`);
+      await scrollPageForPagination(AUTO_SCROLL_DURATION_MS);
+
+      if (!getSession().running) {
+        return;
+      }
+
+      const clicked = await clickNextPage();
+      if (clicked) {
+        log('Нажал на следующую страницу.');
+      } else {
+        log('Не нашёл кнопку следующей страницы. Останавливаю сессию.');
+        stopSession();
+      }
+    } catch (error) {
+      log(`Ошибка автоперехода: ${error?.message || error}`);
+    } finally {
+      autoPageAdvanceInProgress = false;
+    }
+  }
+
   async function collectCurrentPage() {
     if (collectionInProgress) {
       return;
@@ -218,6 +323,7 @@
 
     collectionInProgress = true;
     try {
+      const session = getSession();
       const url = location.href;
       const processedUrls = getProcessedUrls();
       if (processedUrls.includes(url)) {
@@ -254,6 +360,9 @@
       setItems(existing);
       processedUrls.push(url);
       setProcessedUrls(processedUrls);
+      if (session.running) {
+        advanceToNextPage();
+      }
 
       log(`Собрано ${items.length} объявлений на странице. Добавлено новых: ${added}. Всего в массиве items: ${existing.length}.`);
       showToast(`Собрано ${items.length} объявлений`);
@@ -298,17 +407,14 @@
     if (navigationWatcher) {
       clearInterval(navigationWatcher);
       navigationWatcher = null;
+      autoPageAdvanceInProgress = false;
     }
+    autoPageAdvanceInProgress = false;
     log('Сессия остановлена.');
   }
 
   async function startSession() {
     const session = getSession();
-    if (session.running) {
-      ensureLogPanelVisible();
-      return;
-    }
-
     session.running = true;
     session.startedAt = session.startedAt || new Date().toISOString();
     session.lastUrl = location.href;
