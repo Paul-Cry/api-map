@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         2GIS Route Helper
 // @namespace    local.codex.2gis
-// @version      1.1.0
-// @description  Minimal panel: one address, fill 2GIS origin input, click it.
+// @version      1.2.1
+// @description  Minimal panel: origin and destination, fill 2GIS inputs and press Enter.
 // @match        https://2gis.ru/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '1.1.0';
+  const SCRIPT_VERSION = '1.2.1';
   const UI_KEY = 'codex_2gis_min_ui';
   const LOG_KEY = 'codex_2gis_min_logs';
   const MAX_LOG_LINES = 200;
@@ -41,7 +41,7 @@
   }
 
   function getUiState() {
-    return readJson(UI_KEY, { origin: '' });
+    return readJson(UI_KEY, { origin: '', destination: '' });
   }
 
   function setUiState(state) {
@@ -79,8 +79,7 @@
   }
 
   function nativeSetValue(input, value) {
-    const prototype = Object.getPrototypeOf(input);
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
     const setter = descriptor && descriptor.set;
 
     if (setter) {
@@ -89,7 +88,13 @@
       input.value = value;
     }
 
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: value,
+      inputType: 'insertText',
+    }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
@@ -116,6 +121,25 @@
       'input[placeholder="\\u041e\\u0442\\u043a\\u0443\\u0434\\u0430"]',
       '._1nhcezu ._ty5etr input[placeholder="Откуда"]',
       '._1u0eipb input[placeholder="Откуда"]',
+      'input._z1ak2n[placeholder="Откуда"]',
+    ];
+
+    for (const selector of selectors) {
+      const input = document.querySelector(selector);
+      if (input) return input;
+    }
+
+    return null;
+  }
+
+  function findDestinationInput() {
+    const selectors = [
+      'input[placeholder="Куда"]',
+      'input[placeholder="\\u041a\\u0443\\u0434\\u0430"]',
+      'input._z1ak2n[placeholder="Куда"]',
+      'input._uzkowp2[placeholder="Куда"]',
+      '._1nhcezu ._ty5etr input[placeholder="Куда"]',
+      '._1u0eipb input[placeholder="Куда"]',
     ];
 
     for (const selector of selectors) {
@@ -128,8 +152,22 @@
 
   async function typeLikeHuman(input, text) {
     input.focus();
-    input.value = '';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    const setter = descriptor && descriptor.set;
+
+    if (setter) {
+      setter.call(input, '');
+    } else {
+      input.value = '';
+    }
+
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: '',
+      inputType: 'deleteContentBackward',
+    }));
 
     for (const char of text) {
       const nextValue = `${input.value}${char}`;
@@ -137,38 +175,78 @@
       input.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: char }));
       nativeSetValue(input, nextValue);
       input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
-      await sleep(30);
+      await sleep(50);
     }
+
+    await sleep(100);
+    if (input.value !== text) {
+      if (setter) {
+        setter.call(input, text);
+      } else {
+        input.value = text;
+      }
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        data: text,
+        inputType: 'insertText',
+      }));
+    }
+  }
+
+  async function pressEnterWithDelay(input) {
+    log('Жду 1 секунду перед нажатием Enter.');
+    await sleep(1000);
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+    input.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
   }
 
   async function runSimpleFlow() {
     const state = getUiState();
     const origin = String(state.origin || '').trim();
+    const destination = String(state.destination || '').trim();
 
     if (!origin) {
       throw new Error('Введите адрес в поле панели справа.');
     }
 
-    log('Шаг 1. Адрес указан в панели.');
+    if (!destination) {
+      throw new Error('Введите адрес "Куда" в поле панели справа.');
+    }
+
+    log('Шаг 1. Адреса указаны в панели.');
     log('Шаг 2. Нажата кнопка запуска.');
     log('Шаг 3. Ищу input "Откуда" на сайте 2GIS.');
 
-    const input = findOriginInput();
-    if (!input) {
+    const originInput = findOriginInput();
+    if (!originInput) {
       throw new Error('Не найден input "Откуда" на сайте 2GIS.');
     }
 
     log('Шаг 4. Input "Откуда" найден.');
     log('Шаг 5. Вводю значение в input "Откуда" как человек.');
-    await typeLikeHuman(input, origin);
+    await typeLikeHuman(originInput, origin);
     log(`Шаг 6. В input "Откуда" введено значение: ${origin}`);
-    log('Шаг 7. Жду 1 секунду перед нажатием Enter.');
-    await sleep(1000);
     log('Шаг 8. Нажимаю Enter на input "Откуда".');
-    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
-    input.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+    await pressEnterWithDelay(originInput);
     log('Шаг 9. Enter по input "Откуда" выполнен.');
+    await sleep(500);
+
+    log('Шаг 10. Ищу input "Куда" на сайте 2GIS.');
+    const destinationInput = findDestinationInput();
+    if (!destinationInput) {
+      throw new Error('Не найден input "Куда" на сайте 2GIS.');
+    }
+
+    log('Шаг 11. Input "Куда" найден.');
+    log('Шаг 12. Вводю значение в input "Куда" как человек.');
+    await typeLikeHuman(destinationInput, destination);
+    log(`Шаг 13. В input "Куда" введено значение: ${destinationInput.value}`);
+    log('Шаг 14. Нажимаю Enter на input "Куда".');
+    await pressEnterWithDelay(destinationInput);
+    log('Шаг 15. Enter по input "Куда" выполнен.');
     log('Алгоритм завершён.');
   }
 
@@ -289,23 +367,27 @@
       <section class="codex-2gis-panel">
         <div class="codex-2gis-head">
           <div class="codex-2gis-title">2GIS Логи v${SCRIPT_VERSION}</div>
-          <div class="codex-2gis-subtitle">Логи идут по шагам: ввод -> запуск -> поиск -> вставка -> click</div>
+          <div class="codex-2gis-subtitle">Логи идут по шагам: ввод -> запуск -> поиск -> печать -> Enter</div>
         </div>
         <pre id="codex-2gis-log-body"></pre>
       </section>
       <section class="codex-2gis-panel" style="border-left: 1px solid rgba(255,255,255,0.12);">
         <div class="codex-2gis-head">
           <div class="codex-2gis-title">Управление</div>
-          <div class="codex-2gis-subtitle">Один адрес, один запуск, один click</div>
+          <div class="codex-2gis-subtitle">Два адреса, один запуск, два Enter</div>
         </div>
         <div class="codex-2gis-controls">
           <div class="codex-2gis-card">
             <div id="codex-2gis-status" class="codex-2gis-status">Готов к работе</div>
-            <div class="codex-2gis-meta">Введите адрес и нажмите "Выполнить"</div>
+            <div class="codex-2gis-meta">Введите адреса "Откуда" и "Куда", затем нажмите "Выполнить"</div>
           </div>
           <div class="codex-2gis-card">
-            <label class="codex-2gis-label" for="codex-2gis-origin">Адрес</label>
+            <label class="codex-2gis-label" for="codex-2gis-origin">Адрес "Откуда"</label>
             <input id="codex-2gis-origin" class="codex-2gis-input" type="text" placeholder="Введите адрес" />
+          </div>
+          <div class="codex-2gis-card">
+            <label class="codex-2gis-label" for="codex-2gis-destination">Адрес "Куда"</label>
+            <input id="codex-2gis-destination" class="codex-2gis-input" type="text" placeholder="Введите адрес назначения" />
           </div>
           <button id="codex-2gis-run" class="codex-2gis-btn">Выполнить</button>
           <button id="codex-2gis-clear" class="codex-2gis-btn secondary">Очистить логи</button>
@@ -316,16 +398,24 @@
     document.body.appendChild(root);
 
     const originInput = root.querySelector('#codex-2gis-origin');
+    const destinationInput = root.querySelector('#codex-2gis-destination');
     const runButton = root.querySelector('#codex-2gis-run');
     const clearButton = root.querySelector('#codex-2gis-clear');
     const statusNode = root.querySelector('#codex-2gis-status');
 
     const state = getUiState();
     originInput.value = state.origin || '';
+    destinationInput.value = state.destination || '';
 
     originInput.addEventListener('input', () => {
       const nextState = getUiState();
       nextState.origin = originInput.value;
+      setUiState(nextState);
+    });
+
+    destinationInput.addEventListener('input', () => {
+      const nextState = getUiState();
+      nextState.destination = destinationInput.value;
       setUiState(nextState);
     });
 
