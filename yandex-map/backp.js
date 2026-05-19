@@ -25,9 +25,9 @@
   const WORKER_ENABLED_KEY = 'codex_avito_yandex_worker_enabled_v1';
   const WORKER_ID_KEY = 'codex_avito_yandex_worker_id_v1';
   const API_URL_KEY = 'codex_avito_yandex_api_url_v1';
-  const ROUTE_WAIT_MS = 2000;
-  const POLL_MS = 200;
-  const ROUTE_REQUEST_DELAY_MS = 500;
+  const ROUTE_WAIT_MS = 1500;
+  const POLL_MS = 100;
+  const ROUTE_REQUEST_DELAY_MS = 250;
   const WORKER_POLL_MS = 5000;
 
   let isProcessing = false;
@@ -267,7 +267,7 @@
     }
 
     if (!Number.isFinite(averageRouteMs) || averageRouteMs <= 0) {
-      averageRouteMs = Math.max(ROUTE_WAIT_MS + ROUTE_REQUEST_DELAY_MS, ROUTE_REQUEST_DELAY_MS + 1500);
+      averageRouteMs = Math.max(ROUTE_WAIT_MS + ROUTE_REQUEST_DELAY_MS, ROUTE_REQUEST_DELAY_MS + 1000);
     }
 
     const remainingMs = Math.max(0, Math.round(averageRouteMs * remainingRoutes));

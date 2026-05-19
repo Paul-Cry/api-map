@@ -17,6 +17,7 @@
   const PROCESSED_KEY = 'codex_avito_collector_processed_urls';
   const LOGS_KEY = 'codex_avito_collector_logs';
   const SESSION_KEY = 'codex_avito_collector_session';
+  const RUN_ACTIVE_KEY = 'codex_avito_collector_run_active';
   const AUTO_SCROLL_DURATION_MS = 12000;
   const AUTO_SCROLL_STEP_MS = 400;
   let bootstrapStarted = false;
@@ -32,6 +33,57 @@
       .replace(/([A-Za-zА-Яа-яЁё])(\d)/g, '$1 $2')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  function isInsideCarousel(card) {
+    return Boolean(
+      card?.closest(
+        '.index-carousel-3Fpgn, [class*="index-carousel"], [class*="carousel"]'
+      )
+    );
+  }
+
+  function isMetroOrTravelLine(value) {
+    const text = normalizeText(value).toLowerCase();
+    if (!text) return false;
+
+    return text.includes('мин') || text.includes('метро') || /\b(?:от|до)\s*\d/i.test(text) || /\d+\s*[–-]\s*\d+/i.test(text);
+  }
+
+  function isRegionLine(value) {
+    const text = normalizeText(value).trim();
+    if (!text || isMetroOrTravelLine(text)) {
+      return false;
+    }
+
+    if (/\d/.test(text)) {
+      return false;
+    }
+
+    return /^[\p{L}\s.-]+$/u.test(text);
+  }
+
+  function extractAddressText(addressNode) {
+    if (!addressNode) return '';
+
+    const streetNode = addressNode.querySelector('[data-marker="street_link"]');
+    const houseNode = addressNode.querySelector('[data-marker="house_link"]');
+    const directLines = Array.from(addressNode.querySelectorAll(':scope > p'))
+      .map((node) => normalizeText(node.textContent))
+      .filter(Boolean);
+    const lines = directLines.length > 0
+      ? directLines
+      : Array.from(addressNode.querySelectorAll('p')).map((node) => normalizeText(node.textContent)).filter(Boolean);
+
+    const cityLine = isRegionLine(lines[1]) ? lines[1] : '';
+    const streetText = normalizeText(streetNode?.textContent);
+    const houseText = normalizeText(houseNode?.textContent);
+    const streetHouseText = streetText && houseText
+      ? `${streetText}, ${houseText}`
+      : [streetText, houseText].filter(Boolean).join(' ');
+
+    const base = streetHouseText || lines[0] || '';
+    return [cityLine, base].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   }
 
   function getJsonValue(key, fallback) {
@@ -85,6 +137,23 @@
 
   function setSession(session) {
     setJsonValue(SESSION_KEY, session);
+  }
+
+  function resetCollectedData() {
+    setItems([]);
+    setProcessedUrls([]);
+  }
+
+  function isRunActiveInCurrentTab() {
+    return sessionStorage.getItem(RUN_ACTIVE_KEY) === '1';
+  }
+
+  function setRunActiveInCurrentTab(active) {
+    if (active) {
+      sessionStorage.setItem(RUN_ACTIVE_KEY, '1');
+    } else {
+      sessionStorage.removeItem(RUN_ACTIVE_KEY);
+    }
   }
 
   function timestamp() {
@@ -175,19 +244,36 @@
   }
 
   function extractListingItem(card) {
+    if (isInsideCarousel(card)) {
+      return null;
+    }
+
     const priceNode = card.querySelector('[data-marker="item-price-value"], .item-price-value, [class*="item-price-value"]');
     const titleNode = card.querySelector('.iva-item-title-KE8A9, [class*="iva-item-title"]');
     const addressNode = card.querySelector('[data-marker="item-location"]');
     const paramsNode = card.querySelector('[data-marker="item-specific-params"]');
-    const descriptionNode = card.querySelector('.iva-item-bottomBlock-VewGa, [class*="iva-item-bottomBlock"]');
+    const descriptionNode = card.querySelector(
+      '[data-name="Description"] p, [data-name="Description"], .iva-item-bottomBlock-VewGa p, .iva-item-bottomBlock-VewGa, [class*="iva-item-bottomBlock"] p, [class*="iva-item-bottomBlock"]'
+    );
+    const imageNode = card.querySelector(
+      'img[src], img[data-src], img[data-url], img[data-img-src], picture source[srcset], source[srcset]'
+    );
     const linkNode = card.querySelector('a[href]');
+    const imageUrl =
+      imageNode?.getAttribute('data-src') ||
+      imageNode?.getAttribute('data-url') ||
+      imageNode?.getAttribute('data-img-src') ||
+      imageNode?.getAttribute('src') ||
+      imageNode?.getAttribute('srcset')?.split(',')?.[0]?.trim()?.split(' ')?.[0] ||
+      null;
 
     return {
       title: normalizeText(titleNode?.textContent),
       price: normalizeText(priceNode?.textContent),
-      adress: normalizeText(addressNode?.textContent),
+      adress: extractAddressText(addressNode),
       dop: normalizeText(paramsNode?.textContent),
       description: normalizeText(descriptionNode?.textContent),
+      image: imageUrl,
       url: linkNode?.href || null,
     };
   }
@@ -197,17 +283,19 @@
     let cards = [];
 
     for (const selector of selectors) {
-      cards = Array.from(document.querySelectorAll(selector));
+      cards = Array.from(document.querySelectorAll(selector)).filter((card) => !isInsideCarousel(card));
       if (cards.length > 0) break;
     }
 
-    return cards.map((card) => extractListingItem(card));
+    return cards.map((card) => extractListingItem(card)).filter(Boolean);
   }
 
   async function waitForCards(timeoutMs = 25000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const cards = document.querySelectorAll('#bx_serp-item-list [data-marker="item"], [data-marker="item"]');
+      const cards = Array.from(document.querySelectorAll('#bx_serp-item-list [data-marker="item"], [data-marker="item"]')).filter(
+        (card) => !isInsideCarousel(card)
+      );
       if (cards.length > 0) return true;
       await sleep(1000);
     }
@@ -395,6 +483,7 @@
       startedAt: null,
       lastUrl: null,
     });
+    setRunActiveInCurrentTab(false);
     renderLogWindow();
     updateActionPanel();
     log('Локальное хранилище очищено.');
@@ -404,6 +493,7 @@
     const session = getSession();
     session.running = false;
     setSession(session);
+    setRunActiveInCurrentTab(false);
     if (navigationWatcher) {
       clearInterval(navigationWatcher);
       navigationWatcher = null;
@@ -413,10 +503,16 @@
     log('Сессия остановлена.');
   }
 
-  async function startSession() {
+  async function startSession({ resetData = true } = {}) {
+    if (resetData) {
+      resetCollectedData();
+    }
+
+    setRunActiveInCurrentTab(true);
+
     const session = getSession();
     session.running = true;
-    session.startedAt = session.startedAt || new Date().toISOString();
+    session.startedAt = new Date().toISOString();
     session.lastUrl = location.href;
     setSession(session);
 
@@ -446,7 +542,7 @@
       }
     }, 1500);
 
-    log('Скрипт запущен автоматически. Панель логов открыта.');
+    log('Скрипт запущен. Панель логов открыта.');
     await collectCurrentPage();
     updateActionPanel();
   }
@@ -596,7 +692,7 @@
       <div class="meta">Страница: ${location.href}</div>
       <div class="meta" id="codex-avito-count">Записей в массиве items: ${getItems().length}</div>
       <div class="status" id="codex-avito-status">Сессия не запущена</div>
-      <button id="codex-avito-start">Перезапустить скрипт</button>
+      <button id="codex-avito-start">Запустить скрипт</button>
       <button id="codex-avito-open-log" class="secondary">Показать окно логов</button>
       <button id="codex-avito-download" class="secondary">Скачать JSON</button>
       <button id="codex-avito-stop" class="danger">Остановить</button>
@@ -647,13 +743,26 @@
     if (!document.body) return;
     bootstrapStarted = true;
 
+    const shouldResumeRun = isRunActiveInCurrentTab();
+    if (!shouldResumeRun) {
+      resetCollectedData();
+    }
+
     showStartupBanner();
     createPanel();
-    ensureLogPanelVisible();
-    renderLogWindow();
 
-    log('Avito найден, запускаю сбор автоматически.');
-    await startSession();
+    const session = getSession();
+    if (session.running && !shouldResumeRun) {
+      session.running = false;
+      setSession(session);
+    }
+
+    renderLogWindow();
+    updateActionPanel();
+
+    if (shouldResumeRun) {
+      await startSession({ resetData: false });
+    }
   }
 
   GM_registerMenuCommand('Открыть окно логов', () => {

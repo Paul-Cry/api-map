@@ -3,9 +3,9 @@
 // @namespace    local.codex.avito.yandex.transit
 // @version      1.1.1
 // @description  По очереди строит маршруты в Яндекс.Картах и добавляет время до "Родина" и "работа Оли" в JSON-объекты Avito.
-// @match        *://yandex.ru/maps/*
+// @match        *://yandex.kz/maps/*
 // @match        *://yandex.com/maps/*
-// @match        *://*.yandex.ru/maps/*
+// @match        *://*.yandex.kz/maps/*
 // @match        *://*.yandex.com/maps/*
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -25,14 +25,17 @@
   const WORKER_ENABLED_KEY = 'codex_avito_yandex_worker_enabled_v1';
   const WORKER_ID_KEY = 'codex_avito_yandex_worker_id_v1';
   const API_URL_KEY = 'codex_avito_yandex_api_url_v1';
-  const ROUTE_WAIT_MS = 2000;
-  const POLL_MS = 200;
-  const ROUTE_REQUEST_DELAY_MS = 500;
+  const ROUTE_WAIT_MS = 1500;
+  const POLL_MS = 100;
+  const ROUTE_REQUEST_DELAY_MS = 250;
   const WORKER_POLL_MS = 5000;
 
   let isProcessing = false;
   let isWorkerPolling = false;
   let workerTimer = null;
+  let currentJobTimer = null;
+  let navigationTimer = null;
+  let stopSequence = 0;
 
   const DESTINATIONS = [
     {
@@ -267,7 +270,7 @@
     }
 
     if (!Number.isFinite(averageRouteMs) || averageRouteMs <= 0) {
-      averageRouteMs = Math.max(ROUTE_WAIT_MS + ROUTE_REQUEST_DELAY_MS, ROUTE_REQUEST_DELAY_MS + 1500);
+      averageRouteMs = Math.max(ROUTE_WAIT_MS + ROUTE_REQUEST_DELAY_MS, ROUTE_REQUEST_DELAY_MS + 1000);
     }
 
     const remainingMs = Math.max(0, Math.round(averageRouteMs * remainingRoutes));
@@ -329,27 +332,79 @@
     return jobs;
   }
 
-  function buildRouteUrl(job) {
+  function findRouteInput(label) {
+    const wanted = normalizeText(label).toLowerCase();
+    const inputs = [...document.querySelectorAll('input')];
+    return inputs.find((input) => {
+      const haystack = normalizeText([
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.title,
+      ].filter(Boolean).join(' ')).toLowerCase();
+      return haystack.includes(wanted);
+    }) || null;
+  }
+
+  function setNativeInputValue(input, value) {
+    if (!input) return;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    const setter = descriptor?.set;
+    if (setter) {
+      setter.call(input, value);
+    } else {
+      input.value = value;
+    }
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function pressEnter(input) {
+    if (!input) return;
+    const options = { bubbles: true, cancelable: true, composed: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 };
+    input.dispatchEvent(new KeyboardEvent('keydown', options));
+    input.dispatchEvent(new KeyboardEvent('keypress', options));
+    input.dispatchEvent(new KeyboardEvent('keyup', options));
+  }
+
+  async function fillRouteOnCurrentPage(job) {
+    const originInput = findRouteInput('Откуда');
+    const destinationInput = findRouteInput('Куда');
+    if (!originInput || !destinationInput) {
+      throw new Error('Не найдены поля "Откуда" и "Куда" на странице.');
+    }
+
+    log(`Заполняю маршрут: объект ${job.itemIndex + 1}, ${job.destinationLabel}`);
+    setNativeInputValue(originInput, job.origin);
+    originInput.focus();
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    pressEnter(originInput);
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    setNativeInputValue(destinationInput, job.destination);
+    destinationInput.focus();
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    pressEnter(destinationInput);
+  }
+
+  function navigateToJob(job) {
     const url = new URL('https://yandex.ru/maps/213/moscow/');
     url.searchParams.set('ll', '37.617700,55.755863');
     url.searchParams.set('mode', 'routes');
     url.searchParams.set('rtext', `${job.origin}~${job.destination}`);
     url.searchParams.set('rtt', 'mt');
     url.searchParams.set('z', '10');
-    return url.toString();
-  }
-
-  function navigateToJob(job) {
-    const url = buildRouteUrl(job);
     log(`Открываю маршрут: объект ${job.itemIndex + 1}, ${job.destinationLabel}`);
-    window.location.assign(url);
+    window.location.assign(url.toString());
   }
 
   function scheduleCurrentJobProcessing(delayMs = 0) {
     if (delayMs > 0) {
       log(`Планирую чтение маршрута через ${Math.round(delayMs / 1000)} сек.`);
     }
-    window.setTimeout(() => {
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    const sequence = stopSequence;
+    currentJobTimer = window.setTimeout(() => {
+      currentJobTimer = null;
+      if (sequence !== stopSequence) return;
       processCurrentJob().catch((error) => {
         logError('Ошибка обработки маршрута', error);
         const nextState = readState();
@@ -403,6 +458,11 @@
   function start(text) {
     const { items, jobs } = createJobsFromInput(text);
     const [firstJob, ...restJobs] = jobs;
+    stopSequence += 1;
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    if (navigationTimer) window.clearTimeout(navigationTimer);
+    currentJobTimer = null;
+    navigationTimer = null;
     const state = {
       ...emptyState,
       running: true,
@@ -417,7 +477,10 @@
     writeState(state);
     log(`Первый маршрут: объект ${firstJob.itemIndex + 1}, ${firstJob.destinationLabel}. Осталось после него: ${restJobs.length}.`);
     setStatus(`Пауза ${Math.round(ROUTE_REQUEST_DELAY_MS / 1000)} сек перед запросом маршрута...`);
-    setTimeout(() => {
+    const firstSequence = stopSequence;
+    navigationTimer = setTimeout(() => {
+      navigationTimer = null;
+      if (firstSequence !== stopSequence) return;
       navigateToJob(firstJob);
       scheduleCurrentJobProcessing(ROUTE_REQUEST_DELAY_MS);
     }, ROUTE_REQUEST_DELAY_MS);
@@ -427,6 +490,11 @@
     const items = Array.isArray(job?.items) ? job.items : [];
     const { jobs } = createJobsFromInput(JSON.stringify(items));
     const [firstJob, ...restJobs] = jobs;
+    stopSequence += 1;
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    if (navigationTimer) window.clearTimeout(navigationTimer);
+    currentJobTimer = null;
+    navigationTimer = null;
     const state = {
       ...emptyState,
       running: true,
@@ -446,20 +514,94 @@
     log(`Worker accepted API job ${job.jobId}. Items: ${items.length}.`);
     heartbeat('busy', job.jobId).catch((error) => logError('Worker heartbeat failed', error));
     setStatus(`Worker job: ${items.length} items`);
-    setTimeout(() => {
+    const remoteSequence = stopSequence;
+    navigationTimer = setTimeout(() => {
+      navigationTimer = null;
+      if (remoteSequence !== stopSequence) return;
       navigateToJob(firstJob);
       scheduleCurrentJobProcessing(ROUTE_REQUEST_DELAY_MS);
     }, ROUTE_REQUEST_DELAY_MS);
   }
 
-  function stop() {
+  async function stop() {
+    stopSequence += 1;
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    if (navigationTimer) window.clearTimeout(navigationTimer);
+    currentJobTimer = null;
+    navigationTimer = null;
+    setWorkerEnabled(false);
+    const workerEnabledInput = document.querySelector('#codex-yandex-worker-enabled');
+    if (workerEnabledInput) workerEnabledInput.checked = false;
     const state = readState();
     state.running = false;
     state.currentJob = null;
     state.lastError = 'Остановлено вручную';
     writeState(state);
     log('Очередь остановлена вручную.');
+    try {
+      await apiRequest('POST', `/api/workers/${encodeURIComponent(getWorkerId())}/stop`);
+      log('Worker stop sent to API.');
+    } catch (error) {
+      logError('Не удалось отправить stop в API', error);
+    }
     render();
+  }
+
+  function requestLocalStop(reason = 'Остановлено вручную') {
+    stopSequence += 1;
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    if (navigationTimer) window.clearTimeout(navigationTimer);
+    currentJobTimer = null;
+    navigationTimer = null;
+    const state = readState();
+    state.running = false;
+    state.currentJob = null;
+    state.lastError = reason;
+    writeState(state);
+    render();
+  }
+
+  function handleWorkerControl(payload) {
+    const status = payload?.worker?.status || '';
+    if (payload?.command === 'stop' || status === 'stopping' || status === 'stopped') {
+      requestLocalStop('Остановлено через API');
+      setWorkerEnabled(false);
+      const workerEnabledInput = document.querySelector('#codex-yandex-worker-enabled');
+      if (workerEnabledInput) workerEnabledInput.checked = false;
+      return true;
+    }
+    return false;
+  }
+
+  async function resumeWorker() {
+    try {
+      await apiRequest('POST', `/api/workers/${encodeURIComponent(getWorkerId())}/resume`);
+      log('Worker resumed via API.');
+    } catch (error) {
+      logError('Не удалось resume worker', error);
+    }
+  }
+
+  async function syncWorkerNow() {
+    const state = readState();
+    try {
+      const currentJobId = state.remoteJob?.jobId || null;
+      const status = state.running || currentJobId ? 'busy' : 'ready';
+      const heartbeatPayload = await heartbeat(status, currentJobId);
+      if (handleWorkerControl(heartbeatPayload)) return;
+
+      const payload = await apiRequest('GET', `/api/workers/${encodeURIComponent(getWorkerId())}/job`);
+      if (handleWorkerControl(payload)) return;
+
+      if (payload?.job) {
+        startRemoteJob(payload.job);
+        return;
+      }
+
+      log('Worker synchronised manually.');
+    } catch (error) {
+      logError('Не удалось синхронизировать worker', error);
+    }
   }
 
   async function submitRemoteResult(state) {
@@ -475,7 +617,9 @@
       const nextState = readState();
       nextState.remoteJob = null;
       writeState(nextState);
-      heartbeat('ready').catch((error) => logError('Worker heartbeat failed', error));
+      heartbeat('ready')
+        .then((payload) => handleWorkerControl(payload))
+        .catch((error) => logError('Worker heartbeat failed', error));
       scheduleWorkerPoll(1000);
     } catch (error) {
       logError(`Worker failed to submit API job ${jobId}`, error);
@@ -493,15 +637,19 @@
     const state = readState();
     if (state.running || state.remoteJob) {
       if (state.remoteJob?.jobId) {
-        heartbeat('busy', state.remoteJob.jobId).catch((error) => logError('Worker heartbeat failed', error));
+        heartbeat('busy', state.remoteJob.jobId)
+          .then((payload) => handleWorkerControl(payload))
+          .catch((error) => logError('Worker heartbeat failed', error));
       }
       return;
     }
 
     isWorkerPolling = true;
     try {
-      await heartbeat('ready');
+      const heartbeatPayload = await heartbeat('ready');
+      if (handleWorkerControl(heartbeatPayload)) return;
       const payload = await apiRequest('GET', `/api/workers/${encodeURIComponent(getWorkerId())}/job`);
+      if (handleWorkerControl(payload)) return;
       if (payload?.job) {
         startRemoteJob(payload.job);
       } else {
@@ -1185,6 +1333,10 @@
         <button id="codex-yandex-stop" class="codex-yandex-btn danger">Стоп</button>
       </div>
       <div class="codex-yandex-row">
+        <button id="codex-yandex-sync" class="codex-yandex-btn secondary">Sync now</button>
+        <button id="codex-yandex-resume" class="codex-yandex-btn secondary">Resume worker</button>
+      </div>
+      <div class="codex-yandex-row">
         <button id="codex-yandex-copy" class="codex-yandex-btn secondary">Копировать JSON</button>
         <button id="codex-yandex-download" class="codex-yandex-btn secondary">Скачать JSON</button>
       </div>
@@ -1192,7 +1344,6 @@
         <input id="codex-yandex-debug-stop" type="checkbox">
         <span>Стоп на найденном времени</span>
       </label>
-      <button id="codex-yandex-debug-check" class="codex-yandex-btn secondary">Проверить время сейчас</button>
       <button id="codex-yandex-clear" class="codex-yandex-btn secondary">Очистить прогресс</button>
       <pre id="codex-yandex-transit-log"></pre>
     `;
@@ -1227,13 +1378,15 @@
     workerIdInput.value = getWorkerId();
     apiUrlInput.value = getApiUrl();
 
-    workerEnabledInput.addEventListener('change', () => {
+    workerEnabledInput.addEventListener('change', async () => {
       setWorkerEnabled(workerEnabledInput.checked);
       log(workerEnabledInput.checked ? `Worker enabled: ${getWorkerId()}` : 'Worker disabled.');
       if (workerEnabledInput.checked) {
+        await resumeWorker();
         scheduleWorkerPoll(100);
       } else if (workerTimer) {
         clearTimeout(workerTimer);
+        workerTimer = null;
       }
     });
 
@@ -1257,6 +1410,18 @@
       }
     });
 
+    root.querySelector('#codex-yandex-sync').addEventListener('click', () => {
+      syncWorkerNow();
+    });
+
+    root.querySelector('#codex-yandex-resume').addEventListener('click', async () => {
+      setWorkerEnabled(true);
+      workerEnabledInput.checked = true;
+      await resumeWorker();
+      scheduleWorkerPoll(100);
+      log('Worker mode resumed manually.');
+    });
+
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0];
       if (!file) return;
@@ -1275,7 +1440,6 @@
     root.querySelector('#codex-yandex-stop').addEventListener('click', stop);
     root.querySelector('#codex-yandex-copy').addEventListener('click', copyResult);
     root.querySelector('#codex-yandex-download').addEventListener('click', downloadResult);
-    root.querySelector('#codex-yandex-debug-check').addEventListener('click', debugCheckCurrentDuration);
     const debugStopInput = root.querySelector('#codex-yandex-debug-stop');
     debugStopInput.checked = isDebugStopEnabled();
     debugStopInput.addEventListener('change', () => {
