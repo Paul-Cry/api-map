@@ -1,308 +1,207 @@
 import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
-const DATA_DIR = join(__dirname, "data");
-const UPLOADS_DIR = join(__dirname, "uploads");
-const DB_PATH = join(DATA_DIR, "listings.json");
-const MAX_BODY_SIZE = 25 * 1024 * 1024;
+const INDEX_PATH = join(__dirname, "index.html");
 
-const pages = new Map([
-  ["/", join(__dirname, "index.html")],
-  ["/admin", join(__dirname, "admin.html")],
-  ["/admin.html", join(__dirname, "admin.html")],
-]);
+const FAVORITES_MARKER = "data-favorites-export";
 
-await ensureStorage();
+function enhanceHtml(html) {
+  if (html.includes(FAVORITES_MARKER)) {
+    return html;
+  }
+
+  const favoritesCss = `
+<style ${FAVORITES_MARKER}>
+.favoritesBar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;box-shadow:0 8px 22px rgba(26,39,58,.07)}
+.favoritesCount{font-weight:800;color:#0f5132;margin-right:auto}
+.favoritesBtn{height:38px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 13px;font-weight:800;cursor:pointer}
+.favoritesBtn.primary{border-color:var(--accent);background:var(--accent);color:#fff}
+.favoritesBtn:disabled{opacity:.45;cursor:not-allowed}
+.favoriteCell{min-width:118px}
+.favoriteLabel{display:inline-flex;align-items:center;gap:8px;font-weight:800;color:#334155;cursor:pointer}
+.favoriteLabel input{width:18px;height:18px;accent-color:var(--accent)}
+tbody tr.favoriteSelected{background:#eef8ff}
+tbody tr.favoriteSelected:hover{background:#e5f3ff}
+@media(max-width:900px){.favoritesBar{position:sticky;top:0;z-index:8}.favoritesCount{width:100%;margin-right:0}.favoritesBtn{flex:1}.favoriteLabel{justify-content:space-between;width:100%}.favoriteLabel input{width:22px;height:22px}}
+</style>`;
+
+  const favoritesPanel = `
+<div class="favoritesBar" ${FAVORITES_MARKER}>
+  <div class="favoritesCount" id="favoritesCount">Выбрано: 0</div>
+  <button class="favoritesBtn primary" id="downloadFavorites" type="button" disabled>Скачать JSON</button>
+  <button class="favoritesBtn" id="clearFavorites" type="button" disabled>Сбросить выбор</button>
+</div>`;
+
+  const favoritesScript = `
+<script ${FAVORITES_MARKER}>
+(() => {
+  const table = document.getElementById("tbl");
+  if (!table || table.dataset.favoritesReady === "1") return;
+  table.dataset.favoritesReady = "1";
+
+  const moneyToNumber = (text) => {
+    const match = String(text || "").replace(/\\u00a0/g, " ").match(/\\d[\\d\\s]*/);
+    return match ? Number(match[0].replace(/\\s/g, "")) : 0;
+  };
+
+  const minutesToNumber = (text) => {
+    const value = String(text || "");
+    const hours = value.match(/(\\d+)\\s*ч/);
+    const minutes = value.match(/(\\d+)\\s*мин/);
+    if (!hours && !minutes) return null;
+    return (hours ? Number(hours[1]) * 60 : 0) + (minutes ? Number(minutes[1]) : 0);
+  };
+
+  const selectedRows = () =>
+    [...table.querySelectorAll(".favoriteCheck:checked")]
+      .map((checkbox) => checkbox.closest("tr"))
+      .filter(Boolean);
+
+  const updateUi = () => {
+    const rows = selectedRows();
+    const count = document.getElementById("favoritesCount");
+    const download = document.getElementById("downloadFavorites");
+    const clear = document.getElementById("clearFavorites");
+
+    if (count) count.textContent = "Выбрано: " + rows.length;
+    if (download) download.disabled = rows.length === 0;
+    if (clear) clear.disabled = rows.length === 0;
+
+    table.querySelectorAll("tbody tr").forEach((row) => {
+      row.classList.toggle("favoriteSelected", Boolean(row.querySelector(".favoriteCheck:checked")));
+    });
+  };
+
+  const addSelectionControls = () => {
+    const headRow = table.querySelector("thead tr");
+    if (headRow && !headRow.querySelector(".favoriteHead")) {
+      const th = document.createElement("th");
+      th.className = "favoriteHead";
+      th.textContent = "Выбор";
+      headRow.prepend(th);
+    }
+
+    table.querySelectorAll("tbody tr").forEach((row) => {
+      if (row.querySelector(".favoriteCheck")) return;
+
+      const rank = row.dataset.rank || row.querySelector(".rank")?.textContent?.trim() || "";
+      const cell = document.createElement("td");
+      cell.className = "favoriteCell";
+      cell.dataset.label = "Выбор";
+      cell.innerHTML =
+        '<label class="favoriteLabel"><span>Нравится</span><input class="favoriteCheck" type="checkbox" aria-label="Выбрать квартиру #' +
+        rank +
+        '"></label>';
+      row.prepend(cell);
+    });
+  };
+
+  const getCells = (row) => [...row.children].filter((cell) => !cell.classList.contains("favoriteCell"));
+
+  const apartmentFromRow = (row) => {
+    const cells = getCells(row);
+    const commuteText = cells[8]?.innerText || "";
+    const commuteLines = commuteText.split("\\n").map((line) => line.trim()).filter(Boolean);
+    const link = row.querySelector("a.openBtn, a[href]");
+
+    return {
+      rank: Number(row.dataset.rank || row.querySelector(".rank")?.textContent || 0),
+      grade: row.dataset.grade || row.querySelector(".grade")?.textContent?.trim() || "",
+      score: Number.parseFloat(row.querySelector(".score")?.textContent || "0"),
+      title: row.querySelector(".title")?.textContent?.trim() || "",
+      address: row.querySelector(".address")?.textContent?.trim() || "",
+      terms: row.querySelector(".terms")?.textContent?.trim() || "",
+      total_for_3_months_rub: moneyToNumber(cells[3]?.innerText),
+      monthly_payment_rub: moneyToNumber(cells[4]?.innerText),
+      deposit_rub: moneyToNumber(cells[5]?.innerText),
+      commission_rub: moneyToNumber(cells[6]?.innerText),
+      utilities_rub: moneyToNumber(cells[7]?.innerText),
+      commute_to_rodina: commuteLines[0]?.replace("Родина:", "").trim() || "",
+      commute_to_oli_work: commuteLines[1]?.replace("Работа Оли:", "").trim() || "",
+      commute_to_rodina_min: minutesToNumber(commuteLines[0]),
+      commute_to_oli_work_min: minutesToNumber(commuteLines[1]),
+      comment: cells[9]?.innerText?.trim() || "",
+      url: link?.href || "",
+    };
+  };
+
+  const downloadJson = () => {
+    const apartments = selectedRows().map(apartmentFromRow);
+    const payload = {
+      created_at: new Date().toISOString(),
+      count: apartments.length,
+      apartments,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "selected-apartments.json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  addSelectionControls();
+  table.addEventListener("change", (event) => {
+    if (event.target.classList.contains("favoriteCheck")) updateUi();
+  });
+  document.getElementById("downloadFavorites")?.addEventListener("click", downloadJson);
+  document.getElementById("clearFavorites")?.addEventListener("click", () => {
+    table.querySelectorAll(".favoriteCheck:checked").forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    updateUi();
+  });
+  updateUi();
+})();
+</script>`;
+
+  return html
+    .replace("</head>", `${favoritesCss}</head>`)
+    .replace('<section class="tableShell">', `${favoritesPanel}<section class="tableShell">`)
+    .replace("</body>", `${favoritesScript}</body>`);
+}
 
 const server = createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-
-    if (req.method === "GET" && url.pathname === "/api/listings") {
-      const data = await readDatabase();
-      sendJson(res, {
-        items: data.items,
-        updatedAt: data.updatedAt,
-        sourceFile: data.sourceFile,
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, {
+        "Content-Type": "text/plain; charset=utf-8",
+        Allow: "GET, HEAD",
       });
+      res.end("Method not allowed");
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/import") {
-      const mode = url.searchParams.get("mode") === "append" ? "append" : "replace";
-      const importResult = await readImportPayload(req);
-      const current = await readDatabase();
-      const nextItems = mode === "append"
-        ? current.items.concat(importResult.items)
-        : importResult.items;
+    const html = enhanceHtml(await readFile(INDEX_PATH, "utf8"));
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache",
+    });
 
-      const payload = {
-        updatedAt: new Date().toISOString(),
-        sourceFile: importResult.fileName,
-        items: nextItems.map(normalizeListing),
-      };
-
-      await saveUploadedFile(importResult.fileName, importResult.rawText);
-      await writeDatabase(payload);
-      sendJson(res, {
-        ok: true,
-        count: payload.items.length,
-        imported: importResult.items.length,
-        mode,
-        sourceFile: payload.sourceFile,
-        updatedAt: payload.updatedAt,
-      });
+    if (req.method === "HEAD") {
+      res.end();
       return;
     }
 
-    if (req.method === "DELETE" && url.pathname === "/api/listings") {
-      const payload = {
-        updatedAt: new Date().toISOString(),
-        sourceFile: null,
-        items: [],
-      };
-      await writeDatabase(payload);
-      sendJson(res, { ok: true, count: 0, updatedAt: payload.updatedAt });
-      return;
-    }
-
-    if ((req.method === "GET" || req.method === "HEAD") && pages.has(url.pathname)) {
-      await sendFile(res, pages.get(url.pathname), "text/html; charset=utf-8", req.method === "HEAD");
-      return;
-    }
-
-    sendText(res, 404, "Страница не найдена");
+    res.end(html);
   } catch (error) {
     console.error(error);
-    sendJson(res, { ok: false, error: error.message || "Server error" }, 500);
+    res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Server error");
   }
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Listings site is running at http://${HOST}:${PORT}`);
+  console.log(`Apartments ranking is running at http://localhost:${PORT}`);
+  console.log(`For VDS external access use http://SERVER_IP:${PORT}`);
 });
-
-async function ensureStorage() {
-  await mkdir(DATA_DIR, { recursive: true });
-  await mkdir(UPLOADS_DIR, { recursive: true });
-  try {
-    await readFile(DB_PATH, "utf8");
-  } catch {
-    await writeDatabase({ updatedAt: null, sourceFile: null, items: [] });
-  }
-}
-
-async function readDatabase() {
-  const raw = await readFile(DB_PATH, "utf8");
-  const parsed = JSON.parse(raw || "{}");
-  const items = Array.isArray(parsed) ? parsed : parsed.items;
-  return {
-    updatedAt: parsed.updatedAt || null,
-    sourceFile: parsed.sourceFile || null,
-    items: Array.isArray(items) ? items.map(normalizeListing) : [],
-  };
-}
-
-async function writeDatabase(payload) {
-  await writeFile(DB_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-}
-
-async function sendFile(res, path, contentType, headOnly = false) {
-  const body = await readFile(path);
-  res.writeHead(200, {
-    "Content-Type": contentType,
-    "Cache-Control": "no-cache",
-  });
-  if (headOnly) {
-    res.end();
-    return;
-  }
-  res.end(body);
-}
-
-function sendJson(res, body, status = 200) {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-cache",
-  });
-  res.end(JSON.stringify(body));
-}
-
-function sendText(res, status, text) {
-  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end(text);
-}
-
-async function readImportPayload(req) {
-  const contentType = req.headers["content-type"] || "";
-  const body = await readBody(req);
-
-  if (contentType.includes("multipart/form-data")) {
-    const boundary = getBoundary(contentType);
-    if (!boundary) throw new Error("Не найден boundary у multipart-запроса");
-    const file = parseMultipartFile(body, boundary);
-    return parseImportText(file.text, file.name || "objects.json");
-  }
-
-  if (contentType.includes("application/json") || contentType.includes("text/plain")) {
-    return parseImportText(body.toString("utf8"), "api-import.json");
-  }
-
-  throw new Error("Поддерживаются JSON-файл или JSON-тело запроса");
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY_SIZE) {
-        reject(new Error("Файл слишком большой. Лимит 25 МБ"));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-
-function getBoundary(contentType) {
-  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  return match ? (match[1] || match[2]) : null;
-}
-
-function parseMultipartFile(buffer, boundary) {
-  const marker = Buffer.from(`--${boundary}`);
-  const headerBreak = Buffer.from("\r\n\r\n");
-  let offset = 0;
-
-  while (offset < buffer.length) {
-    const start = buffer.indexOf(marker, offset);
-    if (start === -1) break;
-    const headerStart = start + marker.length + 2;
-    const headerEnd = buffer.indexOf(headerBreak, headerStart);
-    if (headerEnd === -1) break;
-
-    const headers = buffer.slice(headerStart, headerEnd).toString("utf8");
-    const next = buffer.indexOf(marker, headerEnd + headerBreak.length);
-    if (next === -1) break;
-
-    if (/name="file"/i.test(headers)) {
-      const nameMatch = headers.match(/filename="([^"]*)"/i);
-      const content = trimMultipartTail(buffer.slice(headerEnd + headerBreak.length, next));
-      return {
-        name: sanitizeFileName(nameMatch?.[1] || "objects.json"),
-        text: content.toString("utf8"),
-      };
-    }
-
-    offset = next;
-  }
-
-  throw new Error("В форме не найден файл с именем поля file");
-}
-
-function trimMultipartTail(buffer) {
-  let end = buffer.length;
-  while (end > 0 && (buffer[end - 1] === 10 || buffer[end - 1] === 13)) end -= 1;
-  return buffer.slice(0, end);
-}
-
-function parseImportText(text, fileName) {
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Файл должен быть валидным JSON");
-  }
-
-  const items = extractItems(parsed);
-  if (!items.length) {
-    throw new Error("В JSON не найден массив объектов");
-  }
-
-  return {
-    fileName: sanitizeFileName(fileName),
-    rawText: text,
-    items,
-  };
-}
-
-function extractItems(parsed) {
-  if (Array.isArray(parsed)) return parsed;
-  for (const key of ["items", "listings", "objects", "data", "apartments"]) {
-    if (Array.isArray(parsed?.[key])) return parsed[key];
-  }
-  return [];
-}
-
-function normalizeListing(item, index = 0) {
-  const get = (...keys) => {
-    for (const key of keys) {
-      if (item?.[key] !== undefined && item?.[key] !== null && item?.[key] !== "") return item[key];
-    }
-    return "";
-  };
-
-  const price = get("price", "monthly", "rent", "cost");
-  const deposit = get("deposit", "pledge", "securityDeposit");
-  const commission = get("commission", "fee");
-  const utilities = get("utilities", "communal", "jku", "ЖКУ");
-
-  return {
-    id: String(get("id", "url") || `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`),
-    title: String(get("title", "name", "object", "apartment") || "Объявление без названия"),
-    price: String(price || ""),
-    address: String(get("address", "adress", "location") || ""),
-    metro: String(get("metro", "station") || ""),
-    terms: String(get("terms", "dop", "details") || ""),
-    description: String(get("description", "text", "comment", "notes") || ""),
-    url: String(get("url", "link", "href") || ""),
-    grade: String(get("grade", "rating") || ""),
-    score: toNumber(get("score", "rankScore")),
-    total: toNumber(get("total", "totalCost", "threeMonthTotal")),
-    monthly: toNumber(get("monthly", "monthlyCost", "rentMonthly")),
-    deposit: toNumber(deposit),
-    commission: toNumber(commission),
-    utilities: toNumber(utilities),
-    commuteHome: String(get("commuteHome", "home", "Родина", "Р РѕРґРёРЅР°") || ""),
-    commuteWork: String(get("commuteWork", "work", "работа Оли", "СЂР°Р±РѕС‚Р° РћР»Рё") || ""),
-    raw: item,
-  };
-}
-
-function toNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return 0;
-  const normalized = value.replace(/\s/g, "").replace(",", ".");
-  const match = normalized.match(/-?\d+(\.\d+)?/);
-  return match ? Number(match[0]) : 0;
-}
-
-function sanitizeFileName(name) {
-  const fallback = "objects.json";
-  const safeBase = basename(name || fallback).replace(/[^\wа-яА-ЯёЁ.-]+/g, "_");
-  const ext = extname(safeBase);
-  return ext ? safeBase : `${safeBase || "objects"}.json`;
-}
-
-async function saveUploadedFile(fileName, text) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const safeName = `${stamp}-${sanitizeFileName(fileName)}`;
-  const target = join(UPLOADS_DIR, safeName);
-  await new Promise((resolve, reject) => {
-    const stream = createWriteStream(target, { encoding: "utf8" });
-    stream.on("finish", resolve);
-    stream.on("error", reject);
-    stream.end(text);
-  });
-}
