@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "C:\\Progra~1\\nodejs\\node.exe avito-parser.js",
-    "transit-site": "node avito-transit-site.js",
-    "transit-api": "node transit-api/server.js"
+    "start": "node portal-server.js",
+    "portal": "node portal-server.js",
+    "feed": "node site_for_obv/app.js",
+    "filter": "node filter-site/app.js",
+    "worker": "node worker-api/server.js",
+    "transit-api": "node worker-api/server.js"
   },
   "dependencies": {
     "playwright": "^1.55.0"

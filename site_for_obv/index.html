@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Объявления</title>
+  <style>
+    :root{
+      --bg:#f4f6f8;
+      --panel:#fff;
+      --text:#17202a;
+      --muted:#64748b;
+      --line:#dce4ee;
+      --accent:#0f6fde;
+      --accent-soft:#edf5ff;
+      --green:#16825d;
+      --amber:#a15c00;
+      --red:#b42318;
+      --shadow:0 10px 24px rgba(26,39,58,.07);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45}
+    header{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+    .head{max-width:1440px;margin:0 auto;padding:18px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}
+    h1{margin:0 0 4px;font-size:27px;letter-spacing:0}
+    .lead{margin:0;color:var(--muted)}
+    .adminLink{display:inline-flex;align-items:center;min-height:38px;padding:0 14px;border-radius:8px;background:var(--text);color:#fff;text-decoration:none;font-weight:800;white-space:nowrap}
+    main{max-width:1440px;margin:0 auto;padding:16px 24px 36px}
+    .stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:#334155}
+    .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 180px 220px;gap:10px;margin-bottom:12px}
+    .toolbar input,.toolbar select{height:42px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 12px}
+    .tableShell{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:auto}
+    table{border-collapse:separate;border-spacing:0;width:100%;min-width:1040px}
+    th,td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:middle;text-align:left}
+    th{font-size:11px;text-transform:uppercase;color:#52606d;background:#f9fbfd;position:sticky;top:75px;z-index:2}
+    tbody tr:hover{background:#fbfdff}
+    tbody tr:last-child td{border-bottom:0}
+    .num{color:var(--muted);font-weight:800}
+    .title{font-weight:850;font-size:15px}
+    .muted{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+    .terms{max-width:430px}
+    .money{font-weight:850;white-space:nowrap}
+    .grade{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;color:#fff;font-weight:850;background:var(--accent)}
+    .grade.A{background:var(--green)}
+    .grade.B{background:var(--accent)}
+    .grade.C{background:var(--amber)}
+    .grade.D,.grade.X{background:var(--red)}
+    .timeCell{min-width:190px}
+    .timeGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .timeBox{border:1px solid #cfe0f5;background:var(--accent-soft);border-radius:8px;padding:8px 9px;min-height:54px}
+    .timeLabel{display:block;color:#52606d;font-size:11px;text-transform:uppercase;font-weight:850}
+    .timeValue{display:block;color:#0f3768;font-size:18px;font-weight:900;line-height:1.2;margin-top:2px;white-space:nowrap}
+    .openBtn{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:7px;background:var(--accent);color:#fff;text-decoration:none;font-weight:850}
+    .empty{background:#fff;border:1px dashed var(--line);border-radius:8px;padding:28px;text-align:center;color:var(--muted)}
+    @media(max-width:860px){
+      header{position:static}
+      .head{display:block;padding:18px 14px}
+      .adminLink{margin-top:14px}
+      .toolbar{grid-template-columns:1fr}
+      main{padding:12px 10px 28px}
+      .tableShell{border:0;background:transparent;box-shadow:none;overflow:visible}
+      table,thead,tbody,tr,th,td{display:block}
+      table{min-width:0}
+      thead{display:none}
+      tbody{display:grid;gap:12px}
+      tr{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:12px}
+      td{border:0;padding:8px 0;display:grid;grid-template-columns:108px 1fr;gap:10px;align-items:start}
+      td:before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:850;text-transform:uppercase}
+      .timeCell{min-width:0}
+      .timeGrid{grid-template-columns:1fr 1fr}
+      .openBtn{width:100%}
+    }
+    @media(max-width:430px){
+      td{grid-template-columns:1fr;gap:5px}
+      .timeGrid{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head">
+      <div>
+        <h1>Объявления</h1>
+        <p class="lead">Короткий список объектов: цена, условия и главное время в дороге.</p>
+      </div>
+      <a class="adminLink" href="/admin">Панель управления</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="stats" id="stats"></div>
+    <div class="toolbar">
+      <input id="q" placeholder="Поиск: адрес, метро, условия">
+      <select id="grade">
+        <option value="">Все оценки</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="D">D</option>
+        <option value="X">X</option>
+      </select>
+      <select id="sort">
+        <option value="default">Как в файле</option>
+        <option value="monthly">Дешевле в месяц</option>
+        <option value="total">Дешевле всего</option>
+        <option value="score">Лучший рейтинг</option>
+      </select>
+    </div>
+
+    <section class="tableShell" id="tableShell">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Оценка</th>
+            <th>Объект</th>
+            <th>Цена</th>
+            <th>Условия</th>
+            <th>Время</th>
+            <th>Ссылка</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+    <div class="empty" id="empty" hidden>Пока нет объявлений. Загрузите JSON-файл в панели управления.</div>
+  </main>
+
+  <script>
+    const state = { items: [] };
+    const rows = document.querySelector("#rows");
+    const stats = document.querySelector("#stats");
+    const empty = document.querySelector("#empty");
+    const tableShell = document.querySelector("#tableShell");
+    const q = document.querySelector("#q");
+    const grade = document.querySelector("#grade");
+    const sort = document.querySelector("#sort");
+
+    load();
+    q.addEventListener("input", render);
+    grade.addEventListener("change", render);
+    sort.addEventListener("change", render);
+
+    async function load() {
+      const response = await fetch("/api/listings");
+      const data = await response.json();
+      state.items = Array.isArray(data.items) ? data.items : [];
+      renderStats(data);
+      render();
+    }
+
+    function renderStats(data) {
+      const source = data.sourceFile ? `Файл: ${escapeHtml(data.sourceFile)}` : "Файл не загружен";
+      const updated = data.updatedAt ? `Обновлено: ${new Date(data.updatedAt).toLocaleString("ru-RU")}` : "База загружена";
+      stats.innerHTML = `<span class="pill">Объектов: ${state.items.length}</span><span class="pill">${source}</span><span class="pill">${updated}</span>`;
+    }
+
+    function render() {
+      const query = q.value.trim().toLowerCase();
+      const wantedGrade = grade.value;
+      let items = state.items.filter((item) => {
+        const haystack = [item.title, item.address, item.metro, item.terms, item.commuteHome, item.commuteWork].join(" ").toLowerCase();
+        return (!query || haystack.includes(query)) && (!wantedGrade || item.grade === wantedGrade);
+      });
+
+      const sortBy = sort.value;
+      if (sortBy === "total") items = items.slice().sort((a, b) => numberOrMax(a.total) - numberOrMax(b.total));
+      if (sortBy === "monthly") items = items.slice().sort((a, b) => numberOrMax(a.monthly) - numberOrMax(b.monthly));
+      if (sortBy === "score") items = items.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+
+      rows.innerHTML = items.map(rowTemplate).join("");
+      empty.hidden = items.length > 0;
+      tableShell.hidden = items.length === 0;
+    }
+
+    function rowTemplate(item, index) {
+      const grade = item.grade || "-";
+      const price = item.monthly ? money(item.monthly) : item.price || "-";
+      const link = item.url ? `<a class="openBtn" href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">Открыть</a>` : "<span class='muted'>Нет ссылки</span>";
+      return `<tr>
+        <td data-label="#"><span class="num">${index + 1}</span></td>
+        <td data-label="Оценка"><span class="grade ${escapeAttr(grade)}">${escapeHtml(grade)}</span>${item.score ? `<span class="muted">${item.score}</span>` : ""}</td>
+        <td data-label="Объект">
+          <div class="title">${escapeHtml(item.title)}</div>
+          <span class="muted">${escapeHtml([item.address, item.metro].filter(Boolean).join(" · "))}</span>
+        </td>
+        <td data-label="Цена" class="money">${escapeHtml(price)}${item.total ? `<span class="muted">Всего: ${money(item.total)}</span>` : ""}</td>
+        <td data-label="Условия" class="terms">
+          ${escapeHtml(item.terms || "-")}
+          <span class="muted">${[
+            item.deposit ? `Залог ${money(item.deposit)}` : "",
+            item.commission ? `Комиссия ${money(item.commission)}` : "",
+            item.utilities ? `ЖКУ ${money(item.utilities)}` : ""
+          ].filter(Boolean).join(" · ")}</span>
+        </td>
+        <td data-label="Время" class="timeCell">${timeTemplate(item)}</td>
+        <td data-label="Ссылка">${link}</td>
+      </tr>`;
+    }
+
+    function timeTemplate(item) {
+      return `<div class="timeGrid">
+        <div class="timeBox"><span class="timeLabel">Дом</span><span class="timeValue">${escapeHtml(item.commuteHome || "-")}</span></div>
+        <div class="timeBox"><span class="timeLabel">Работа</span><span class="timeValue">${escapeHtml(item.commuteWork || "-")}</span></div>
+      </div>`;
+    }
+
+    function numberOrMax(value) { return Number(value) > 0 ? Number(value) : Number.MAX_SAFE_INTEGER; }
+    function money(value) { return `${Number(value).toLocaleString("ru-RU")} ₽`; }
+    function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch])); }
+    function escapeAttr(value) { return escapeHtml(value).replace(/`/g, "&#96;"); }
+  </script>
+</body>
+</html>
