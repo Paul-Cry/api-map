@@ -1,546 +1,137 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Рейтинг квартир</title><style>:root{--bg:#f3f5f7;--panel:#fff;--text:#17202a;--muted:#667789;--line:#dfe6ee;--soft:#f8fafc;--accent:#0f6fde;--green:#16825d;--blue:#2563eb;--amber:#a15c00;--red:#b42318;--shadow:0 12px 30px rgba(26,39,58,.08)}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45}.pageHeader{background:linear-gradient(180deg,#fff,#f9fbfd);border-bottom:1px solid var(--line);padding:22px 24px 18px;position:sticky;top:0;z-index:10}.headerTop{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;max-width:1500px;margin:0 auto}h1{margin:0 0 7px;font-size:28px;letter-spacing:0}.lead{margin:0;color:var(--muted);max-width:980px}.summary{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:#334155;white-space:nowrap}.wrap{max-width:1500px;margin:0 auto;padding:18px 24px 34px}.toolbar{display:grid;grid-template-columns:minmax(240px,1fr) 190px 230px;gap:10px;margin-bottom:14px}.toolbar input,.toolbar select{height:42px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 12px;box-shadow:0 1px 0 rgba(10,20,30,.03)}.tableShell{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);overflow:auto}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1340px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{font-size:11px;letter-spacing:.02em;text-transform:uppercase;color:#52606d;background:#f9fbfd;position:sticky;top:102px;z-index:5}tbody tr:hover{background:#fbfdff}tbody tr:last-child td{border-bottom:0}.rank{font-size:20px;font-weight:800}.grade{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;color:#fff;font-weight:800}.grade.A{background:var(--green)}.grade.B{background:var(--blue)}.grade.C{background:var(--amber)}.grade.D,.grade.X{background:var(--red)}.score{display:block;margin-top:4px;color:var(--muted);font-size:12px}.title{font-weight:800;margin-bottom:3px}.address{max-width:300px}.terms,.cellNote{display:block;color:var(--muted);font-size:12px;margin-top:5px}.money{font-weight:800;white-space:nowrap}.money span{display:block;white-space:normal;color:var(--muted);font-weight:500;font-size:12px;margin-top:4px}.primaryMoney{font-size:18px;color:#0f5132}.why{max-width:300px}.openBtn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 13px;border-radius:7px;background:var(--accent);color:#fff;text-decoration:none;font-weight:800}.openBtn:hover{background:#0a58bc}.note{color:var(--muted);font-size:12px;margin-top:12px}.hidden{display:none}@media(max-width:900px){.pageHeader{position:static;padding:18px 14px}.headerTop{display:block}h1{font-size:23px}.lead{font-size:13px}.wrap{padding:12px 10px 28px}.toolbar{grid-template-columns:1fr}.tableShell{background:transparent;border:0;box-shadow:none;overflow:visible}table,thead,tbody,tr,th,td{display:block}table{min-width:0}thead{display:none}tbody{display:grid;gap:12px}tr{background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 22px rgba(26,39,58,.08);padding:12px}td{border-bottom:0;padding:8px 0;display:grid;grid-template-columns:128px 1fr;gap:10px;align-items:start}td:before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.02em}.rank{font-size:22px}.grade{width:34px;height:34px}.address{max-width:none}.terms{font-size:12px}.primaryMoney{font-size:20px}.openBtn{width:100%}.why{max-width:none}}@media(max-width:430px){td{grid-template-columns:1fr;gap:4px}.pill{width:100%;white-space:normal}.summary{gap:6px}.money{white-space:normal}}</style></head><body><header class="pageHeader"><div class="headerTop"><div><h1>Рейтинг квартир</h1><p class="lead">Полный список по градации. Главный столбец показывает, сколько денег отдадим всего за 3 месяца: аренда за 3 месяца + залог + комиссия + известные ЖКУ. Счетчики добавятся сверху, если они указаны отдельно.</p><div class="summary"><span class="pill">Вариантов без дублей: 42</span><span class="pill">A - лучшие: 5</span><span class="pill">X - лучше не брать: 1</span></div></div></div></header><main class="wrap"><div class="toolbar"><input id="q" placeholder="Поиск: адрес, метро, условия"><select id="grade"><option value="">Все оценки</option><option>A - лучшие</option><option>B - хорошие</option><option>C - средние</option><option>D - слабые</option><option>X - не брать</option></select><select id="sort"><option value="rank">Сначала лучшие</option><option value="total">Дешевле за 3 месяца</option><option value="monthly">Дешевле в месяц</option><option value="work">Быстрее до работы Оли</option><option value="home">Быстрее до Родины</option></select></div><section class="tableShell"><table id="tbl"><thead><tr><th>Место</th><th>Оценка</th><th>Квартира</th><th>Всего отдадим за 3 месяца</th><th>Платеж в месяц</th><th>Залог</th><th>Комиссия</th><th>ЖКУ</th><th>Сколько добираться</th><th>Комментарий</th><th>Объявление</th></tr></thead><tbody><tr data-grade="A" data-rank="1" data-total="60000" data-work="44" data-home="24" data-monthly="15000" data-text="2-к. квартира, 42 м², 2/2 эт. с. шеметово мкр-н новый, б залог 15 000 ₽ · без комиссии · жку включены без счетчиков сдается на длительный срок сухая, светлая, теплая 2-комнатная квартира (не угловая) в тихом и зеленом районе московской области, село шеметово, микрорайон новый. общая площадь квартиры составляет 42,5 кв. м, жилая площадь — 24,2 кв. м, кухня — 5,9 кв. м. квартира расположена на 2 этаже 2-этажного дома. высота потолков — 2,5 метра. отличный вариант для тех, кто ищет спокойное место для жизни вдали от городской суеты. в квартире один совмещенный санузел. выход на балкон — в гостинной. квартира частично меблирована, что позволяет сразу же заселиться и жить. дом в хорошем состоянии, хорошие соседи. вокруг много зелени. только порядочной семье! оплата 15 т. р. + по счётчикам (вода и электроэнергия). залог 15 т. р. договор.12 мая 2025 без комиссии, состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">1</span></td>
-<td data-label="Оценка"><span class="grade A">A</span><span class="score">103.8</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 42 м², 2/2 эт.</div><div class="address">с. Шеметово Мкр-н Новый, Б</div><div class="terms">Залог 15 000 ₽ · Без комиссии · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">60 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">15 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>15 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_bogorodskoe/kvartiry/2-k._kvartira_42_m_22_et._7365600429?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJaUEUwRlNJeE9PNzY2Skx6Ijt9L9NZzj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="A" data-rank="2" data-total="140000" data-work="43" data-home="24" data-monthly="40000" data-text="2-к. квартира, 49 м², 3/3 эт. 47 залог 20 000 ₽ · без комиссии · жку включены без счетчиков новая 2-х комнатная меблированная квартира 49 м 2. сдает собственник без проживания собственника, сдается впервые потолки 3 м, вся бытовая техника. тихое уютное место. сдается одному мужчине, двум мужчиная, семейной паре, для проживания не более 2-х человек, национальность не имеет значения, без детей. имеется парковка. до торгового центра южные ворота 2 км, ходит бесплатный транспорт (5 минут пути). до метро марьино 5 км ходит общественный транспорт №1228 (10 минут), до метро домодедовская 7 км №355 (15 минут). остановка автобуса в 100 метрах от дома, магазин пятерочка в 70 метрах, дикси в 100 метрах от дома. ресторан, кафешки в 100 метрах от дома. по договору. залог можно разбить на 2 месяца. есть стоянка для авто. сдает собственник (без комиссии).15 февраля 12:15 без комиссии, состояние/комплектация, жку понятны. минусы: без детей">
-<td data-label="Место"><span class="rank">2</span></td>
-<td data-label="Оценка"><span class="grade A">A</span><span class="score">86.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 49 м², 3/3 эт.</div><div class="address">47</div><div class="terms">Залог 20 000 ₽ · Без комиссии · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">140 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">40 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>20 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация, ЖКУ понятны. Минусы: без детей</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/dzerzhinskiy/kvartiry/2-k._kvartira_49_m_33_et._7848494330?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJLcWhwMmtFam1SdmFETlJVIjt9Ier1mT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="A" data-rank="3" data-total="144000" data-work="44" data-home="24" data-monthly="38000" data-text="2-к. квартира, 43 м², 1/3 эт. рп. горки ленинские южный пр., 11 к 1 залог 30 000 ₽ · без комиссии · жку 6 000 ₽ + счетчики сдам 2-х комнатную квартиру. на длительный срок семейной паре. с ремонтом! санузел совмещённый, оборудован качественной сантехникой. рассмотрю приличных и платежеспособных арендаторов без животных). подробности по телефону. просьба риэлторам не беспокоить. у собственника могут быть дополнительные пожелания к арендаторам. их лучше обсудить заранее: в чате или по телефону.22 мая 2017 без комиссии, состояние/комплектация. минусы: без животных">
-<td data-label="Место"><span class="rank">3</span></td>
-<td data-label="Оценка"><span class="grade A">A</span><span class="score">78.1</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 43 м², 1/3 эт.</div><div class="address">рп. Горки Ленинские Южный пр., 11 к 1</div><div class="terms">Залог 30 000 ₽ · Без комиссии · ЖКУ 6 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">144 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">38 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>30 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>6 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация. Минусы: без животных</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/vidnoe/kvartiry/2-k._kvartira_43_m_13_et._1167027248?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJ1NFZpQzlqWHJGOFpyV2o2Ijt94BV5uj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="A" data-rank="4" data-total="135000" data-work="44" data-home="24" data-monthly="35000" data-text="2-к. квартира, 42 м², 2/2 эт. ул. шибанкова, 32 залог 30 000 ₽ · без комиссии · жку 5 000 ₽ + счетчики долгосрочно, договор на год. двухкомнатная квартира в уютном, а главное, тихом месте вдали от дороги. перед домом большой благоустроенный парк. за домом — школа. рядом находится городской дворец культуры «созвездие». в шаговой доступности несколько сетевых магазинов. также в нескольких минутах ходьбы есть детский сад. до автобусной остановки — 3 минуты ходьбы. до вокзала на автомобиле — 10 минут; до центра города — 15 минут. до москвы — 40-60 минут. рядом с соседним домом есть небольшая детская площадка, а большая — в парке. окна выходят не во двор. парковка во дворе, но машины также можно оставлять у дворца культуры. всегда горячая вода (газовая колонка). отопление центральное. в квартиру можно сразу заезжать и жить. возможен торг!30 января 19:58 без комиссии">
-<td data-label="Место"><span class="rank">4</span></td>
-<td data-label="Оценка"><span class="grade A">A</span><span class="score">72.4</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 42 м², 2/2 эт.</div><div class="address">ул. Шибанкова, 32</div><div class="terms">Залог 30 000 ₽ · Без комиссии · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">135 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">35 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>30 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._kvartira_42_m_22_et._7945640763?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiI1VG5hVVczVnJvalBSWmhOIjt9Lpn_Iz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="A" data-rank="5" data-total="150000" data-work="28" data-home="48" data-monthly="40000" data-text="2-к. квартира, 57,9 м², 10/14 эт. рп. свердловский молодёжная ул., 2 залог 30 000 ₽ · без комиссии · жку 10 000 ₽ + счетчики все что необходимое для жизни все есть. в доме находится продуктовый магазин пятерочка, рядом сбербанк, фитнес центр, маркетплейсы и множество других магазинов, а также поликлиника, школа, сад. недалеко набережная и парк. оплата за месяц 30000 ₽+ жкх ( летний период 8-9 тыс ₽ и зимний период 10-13 тыс ₽).14 мая 2025 без комиссии">
-<td data-label="Место"><span class="rank">5</span></td>
-<td data-label="Оценка"><span class="grade A">A</span><span class="score">66</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 57,9 м², 10/14 эт.</div><div class="address">рп. Свердловский Молодёжная ул., 2</div><div class="terms">Залог 30 000 ₽ · Без комиссии · ЖКУ 10 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">150 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">40 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>30 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>10 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>48 мин</b></div><div>Работа Оли: <b>28 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/sverdlovskiy/kvartiry/2-k._kvartira_579_m_1014_et._7357046865?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJvUnZxMllRcGxKQWx2UGFRIjt9sGmMij8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="6" data-total="180000" data-work="43" data-home="24" data-monthly="45000" data-text="2-к. квартира, 39,8 м², 10/14 эт. воскресенское любучанский пер., 1 к 3 залог 45 000 ₽ · без комиссии · все жку включены сдаётся уютная квартиры 2-евро квартира в жк «остафьево» на 10-м этаже современного 14-этажного дома, построенного в 2024 году. высокие потолки 2.8 метра создают ощущение простора. квартира полностью меблирована, что позволяет сразу же заехать и начать жить. в квартире есть вся необходимая мебель, а на компактной кухне вы найдёте современную бытовую технику: холодильник, телевизор, стиральную и посудомоечную машины. дом оборудован одним пассажирским и одним грузовым лифтами, что значительно облегчает перемещение. для вашего автомобиля предусмотрена наземная парковка. район обладает развитой инфраструктурой: рядом есть школы и детские сады, что будет удобным для семей с детьми. в шаговой доступности находятся магазины, что позволяет экономить время на покупках. хорошая транспортная доступность обеспечивает быстрое перемещение по городу. условия аренды: договор аренды, депозит (можно поделить), ку входят в стоимость аренды. записывайтесь на просмотр, чтобы лично убедиться в достоинствах этой квартиры! звоните, и мы с удовольствием ответим на все ваши вопросы.7 дней назад без комиссии, состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">6</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">64.3</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 39,8 м², 10/14 эт.</div><div class="address">Воскресенское Любучанский пер., 1 к 3</div><div class="terms">Залог 45 000 ₽ · Без комиссии · Все ЖКУ включены</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">180 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">45 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>45 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_voskresenskoe/kvartiry/2-k._kvartira_398_m_1014_et._8121368754?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJ6V20yUGREcXl1cHZIaGVTIjt9eZVe_z8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="7" data-total="149000" data-work="44" data-home="24" data-monthly="43000" data-text="2-к. квартира, 34,7 м², 17/17 эт. пгт. мирный ул. академика северина, 5 к 1 без залога · комиссия 50% · жку 3 000 ₽ + счетчики без залога! сдается уютная квартира в современном жилом комплексе комфорт-класса «томилино парк». квартира оборудована кухней со встроенной техникой и всей необходимой мебелью, телевизор, стиральная машина, электрогриль, пароварка, в комнате — двуспальная кровать и вместительный встроенный шкаф для хранения вещей. установлен кондиционер. санузел совмещенный. застекленная лоджия. на первых этажах дома работают магазины, кафе, салоны красоты и аптеки. в пешей доступности детские сады, школа, физкультурно-оздоровительный комплекс; мега, глобус, outlet village — 15 мин. на авто. недалеко от жилого комплекса расположен волкушинский карьер с пляжем, томилинский заповедник. транспортная доступность: + до м. котельники — 13 минут автомобиле. + до мцд (d 3) томилино — 12 минут на автомобиле. + удобный и быстрый выезд на новорязанское шоссе и мкад рассмотрим аккуратных и ответственных жильцов. квартира идеально подойдет для 1-3 человек или семейной пары с ребенком. звоните и записывайтесь на просмотр!3 дня назад низкий залог">
-<td data-label="Место"><span class="rank">7</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">63.7</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 34,7 м², 17/17 эт.</div><div class="address">пгт. Мирный ул. Академика Северина, 5 к 1</div><div class="terms">Без залога · Комиссия 50% · ЖКУ 3 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">149 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">43 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>20 000 ₽</b></td>
-<td data-label="ЖКУ"><b>3 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">низкий залог</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_oktyabrskiy/kvartiry/2-k._kvartira_347_m_1717_et._8048354434?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiI4NFNRUDlqUWpRRkJjZnEzIjt9ZQhQFj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="8" data-total="170000" data-work="24" data-home="24" data-monthly="40000" data-text="2-к. квартира, 48,8 м², 2/9 эт. латышская ул., 2 залог 10 000 ₽ · комиссия 100% · жку включены без счетчиков сдаётся на длительный 2-х комнатная квартира улучшенной планировки в г. наро-фоминск. в квартире хороший ремонт, полностью меблированная с бытовой техникой. вся инфраструктура города рядом.вчера состояние/комплектация, жку понятны, низкий залог. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">8</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">60.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 48,8 м², 2/9 эт.</div><div class="address">Латышская ул., 2</div><div class="terms">Залог 10 000 ₽ · Комиссия 100% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">170 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">40 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>10 000 ₽</b></td>
-<td data-label="Комиссия"><b>40 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>24 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны, низкий залог. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._kvartira_488_m_29_et._8059070512?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJRSnNjU2VEbUlIY3ZvTHE2Ijt9v7KUND8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="9" data-total="200000" data-work="43" data-home="24" data-monthly="50000" data-text="2-к. квартира, 44,2 м², 3/8 эт. воскресенское мостовая ул., 5 к 3 залог 50 000 ₽ · без комиссии · жку включены без счетчиков сдается уютная двухкомнатная квартира (евро двушка) на третьем этаже монолитного дома, построенного в 2021 году, в новой москве район десна от собственника россиянам. все для проживания имеется. рядом размещены магазины, кафе, парикмахерские, детский сад, аптека, валберис, озон. ближайшее метро ольховая (15-20 мин.). в квартире выполнен косметический ремонт. кухня оборудована необходимой техникой: холодильник, плита и микроволновая печь. в ванной комнате установлена стиральная машина. для удобства жильцов предусмотрен вместительный шкаф-купе в спальне. в доме есть грузовой лифт, а также открытая парковка во дворе.28 февраля 09:49 без комиссии, состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">9</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">59.8</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 44,2 м², 3/8 эт.</div><div class="address">Воскресенское Мостовая ул., 5 к 3</div><div class="terms">Залог 50 000 ₽ · Без комиссии · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">200 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_voskresenskoe/kvartiry/2-k._kvartira_442_m_38_et._8022802985?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJuajVCelFHa2o2bzlaOXJKIjt95M4eZD8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="10" data-total="211000" data-work="49" data-home="23" data-monthly="54000" data-text="2-к. квартира, 45 м², 5/5 эт. москва б-р генерала карбышева, 6 к 1 залог 49 000 ₽ · без комиссии · жку 5 000 ₽ + счетчики сдается уютная двухкомнатная квартира на длительный срок в престижном районе москвы. комнаты смежные, что обеспечивает комфортное проживание. в квартире выполнен косметический ремонт, стены светлые, полы деревянные. из техники имеется холодильник, стиральная машина и телевизор. кухня площадью 7 м² оборудована газовой плитой и обеденным столом. ванная комната и санузел раздельные, оснащены всем необходимым. в комнате установлен шкаф для хранения вещей. квартира расположена на 5 этаже кирпичного дома. в доме есть газоснабжение. во дворе предусмотрены детская и спортивная площадки, а также открытая парковка. курение в квартире запрещено, но можно проживать с детьми и питомцами. рассмотрим семью из не более 3-х человек! пишите сообщения, на звонки не отвечаю временно.10 часов назад без комиссии, состояние/комплектация">
-<td data-label="Место"><span class="rank">10</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">57.8</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 45 м², 5/5 эт.</div><div class="address">Москва б-р Генерала Карбышева, 6 к 1</div><div class="terms">Залог 49 000 ₽ · Без комиссии · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">211 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">54 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>49 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>23 мин</b></div><div>Работа Оли: <b>49 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_45_m_55_et._8008855670?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiIxNk1haE1BamxScHM4NXViIjt9j398kT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="11" data-total="200000" data-work="43" data-home="24" data-monthly="50000" data-text="3-к. квартира, 52,5 м², 3/6 эт. пгт. монино ул. генерала ковачевича, 8 к 2 залог 50 000 ₽ · без комиссии · жку 7 000 ₽ + счетчики новая квартира в новом доме! от собственника без комиссии. небольшая уютная евро трешка. 6 спальных мест. сдаётся длительно.15 ноября 2025 без комиссии, состояние/комплектация">
-<td data-label="Место"><span class="rank">11</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">57.5</span></td>
-<td data-label="Квартира"><div class="title">3-к. квартира, 52,5 м², 3/6 эт.</div><div class="address">пгт. Монино ул. Генерала Ковачевича, 8 к 2</div><div class="terms">Залог 50 000 ₽ · Без комиссии · ЖКУ 7 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">200 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>7 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/monino/kvartiry/3-k._kvartira_525_m_36_et._7758172464?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJUQkN1bUlwRnhHUVJFVzNzIjt977kcED8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="12" data-total="180024" data-work="43" data-home="24" data-monthly="45008" data-text="3-к. квартира, 68 м², 3/3 эт. ул. нарское лесничество, 22 залог 45 000 ₽ · без комиссии · счетчики включены · жку 8 ₽ возле дома, есть: детская пл, множество магазинов, пруд, жд станция в 15 минутах ходьбы.20 марта 2024 без комиссии, жку понятны">
-<td data-label="Место"><span class="rank">12</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">56.3</span></td>
-<td data-label="Квартира"><div class="title">3-к. квартира, 68 м², 3/3 эт.</div><div class="address">ул. Нарское Лесничество, 22</div><div class="terms">Залог 45 000 ₽ · Без комиссии · Счетчики включены · ЖКУ 8 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">180 024 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">45 008 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>45 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>8 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/3-k._kvartira_68_m_33_et._3837898481?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJpQW1UbGFwdjQ3bmdlVE0zIjt9JQMp_z8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="13" data-total="105000" data-work="53" data-home="57" data-monthly="35000" data-text="2-комн. квартира, 45 м², 19/19 этаж москва, юао, р-н нагатинский затон, м. нагатинский затон, улица корабельная, 1 на несколько месяцев, комм. платежи включены (без счётчиков), без комиссии, без залога  без комиссии, жку понятны, низкий залог. минусы: на несколько месяцев, мало описания">
-<td data-label="Место"><span class="rank">13</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">55.4</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 45 м², 19/19 этаж</div><div class="address">Москва, ЮАО, р-н Нагатинский затон, м. Нагатинский Затон, улица Корабельная, 1</div><div class="terms">На несколько месяцев, комм. платежи включены (без счётчиков), без комиссии, без залога</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">105 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">35 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>57 мин</b></div><div>Работа Оли: <b>53 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, ЖКУ понятны, низкий залог. Минусы: на несколько месяцев, мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/326625255/?context=4.2pKs8J9BWGM.TZgBdmTcbSugzehRGa1OLgmEiHWXo2id74IEdWoU3er3f9WuiI5mZaPLtIbLqzDwuzS5JJSHnOQwnw&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="14" data-total="177600" data-work="30" data-home="44" data-monthly="37000" data-text="2-комн. квартира, 45 м², 2/5 этаж москва, юзао, р-н черемушки, м. новые черёмушки, улица гарибальди, 23к1 от года, комм. платежи включены (без счётчиков), комиссия 80%, залог 37 000 ₽ рассмотрим 1-3 человек, без животных! арендатор оплачивает аренду 37.000 рублей + все коммунальные платежи ( ~6000 рублей в месяц) у собственника могут быть дополнительные пожелания к жильцам. без комиссии, жку понятны. минусы: без животных, высокая комиссия">
-<td data-label="Место"><span class="rank">14</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">53.6</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 45 м², 2/5 этаж</div><div class="address">Москва, ЮЗАО, р-н Черемушки, м. Новые Черёмушки, улица Гарибальди, 23К1</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 80%, залог 37 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">177 600 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">37 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>37 000 ₽</b></td>
-<td data-label="Комиссия"><b>29 600 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>44 мин</b></div><div>Работа Оли: <b>30 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, ЖКУ понятны. Минусы: без животных, высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/329612685/?context=4.mep1FSdXGjg.IDCp7lt-3DgbnKd-62VF6l2futF7smIA-SAQaEgVPZlIqZSbOOTKyDM0SHeFv4UsHUzkcwYWOK_Lgg&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="B" data-rank="15" data-total="152200" data-work="44" data-home="24" data-monthly="38400" data-text="2-к. квартира, 45 м², 12/14 эт. воскресенское остафьевское ш., 12 к 1 без залога · комиссия 100% · жку 1 400 ₽ + счетчики без залога! cдaется уютнaя кваpтиpа на длительный сpок cо вcей нeобхoдимoй теxникoй и мебелью: холодильник, плита, чайник, кофеварочная машина, cтиpальнaя машина, диван, двухспальная кровать, шкаф, комод, прихожая. в шаговой доступности поликлиника, аптеки, фитнес-центр, почта, сетевые магазины, пункты выдачи маркетплейсов. условия аренды: 40000₽ в месяц + 1400₽ жку + свет, вода по счетчикам. комиссия 100% оплачивается 1 раз при заселении. квартира сдаётся на длительный срок. рассмотрим семейную пару, можно с детьми. можно мужчин с организациями. без животных. звоните и записывайтесь на просмотр!2 недели назад низкий залог. минусы: без животных, высокая комиссия">
-<td data-label="Место"><span class="rank">15</span></td>
-<td data-label="Оценка"><span class="grade B">B</span><span class="score">52.6</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 45 м², 12/14 эт.</div><div class="address">Воскресенское Остафьевское ш., 12 к 1</div><div class="terms">Без залога · Комиссия 100% · ЖКУ 1 400 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">152 200 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">38 400 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>37 000 ₽</b></td>
-<td data-label="ЖКУ"><b>1 400 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">низкий залог. Минусы: без животных, высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_voskresenskoe/kvartiry/2-k._kvartira_45_m_1214_et._8150885257?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJRckJvSXp6ZEVhVGxraGdFIjt9HM4K2j8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="16" data-total="200000" data-work="44" data-home="24" data-monthly="40000" data-text="2-к. квартира, 45 м², 5/9 эт. ул. шибанкова, 84 залог 40 000 ₽ · комиссия 100% · жку включены без счетчиков сдам 2-х комнатную квартиру в г. наро-фоминск. имеется техника и мебель необходимая для проживания. 40000 руб. + свет + 100% комиссия. в шаговой доступности вся инфраструктура.19 июня 2024 состояние/комплектация, жку понятны. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">16</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">45</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 45 м², 5/9 эт.</div><div class="address">ул. Шибанкова, 84</div><div class="terms">Залог 40 000 ₽ · Комиссия 100% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">200 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">40 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>40 000 ₽</b></td>
-<td data-label="Комиссия"><b>40 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._kvartira_45_m_59_et._4100687136?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJWWEVmeGFEUzZKUTNQU0tWIjt9k11Odz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="17" data-total="175000" data-work="44" data-home="24" data-monthly="35000" data-text="2-к. квартира, 42,6 м², 2/5 эт. ул. шибанкова, 27 залог 35 000 ₽ · комиссия 100% · все жку включены арт. 101367497 не упусти выгодное предложение! скидки при повторном заселении! есть все необходимое для проживания на длительный срок. всё в максимальной близости от дома (школы, сады, магазины и тц), а так же общественный транспорт в 3 мин. заинтересовало предложение? свяжись с нами прямо сейчас! reliz недвижимость. только у нас: уникальное предложение по покупке недвижимости без первого взноса! помощь в оформлении ипотеки. надежные партнеры и застройщики. эксклюзивная база собственников жилой недвижимости. оформление документов. индивидуальный подход к каждому клиенту. служба поддержки 24/7. бесплатный поиск жильцов для собственников недвижимости + страхование за счет компании!8 июля 2025 без комиссии, жку понятны. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">17</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">43.4</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 42,6 м², 2/5 эт.</div><div class="address">ул. Шибанкова, 27</div><div class="terms">Залог 35 000 ₽ · Комиссия 100% · Все ЖКУ включены</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">175 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">35 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>35 000 ₽</b></td>
-<td data-label="Комиссия"><b>35 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, ЖКУ понятны. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._kvartira_426_m_25_et._7509679642?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiI4Z1FyWk10OGJrcVd6QTFwIjt9ZTlBbz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="18" data-total="187000" data-work="44" data-home="44" data-monthly="41000" data-text="2-к. квартира, 46 м², 1/5 эт. профсоюзная ул., 11 залог 32 000 ₽ · комиссия 100% · счетчики включены · жку 9 000 ₽ сдаётся двухкомнатная квартира в южном микрорайоне города наро-фоминск — идеальный вариант для комфортного проживания! о квартире: — общая площадь: 46 кв. м; — этаж: 1 этаж 5-этажного дома ; — ремонт: косметический (чистая и ухоженная квартира); — вся необходимая мебель и техника для комфортной жизни уже в наличии. инфраструктура района: южный микрорайон — это развитый район с прекрасной инфраструктурой, где все необходимое находится в шаговой доступности: — школы №1, №5; — детские сады; — аптеки; — сетевые магазины: «пятерочка», «дикси», «магнит», «верный»; — круглосуточные магазины; — тц «серпантин»; — центр детской школы искусств «гармония»; — хореографическая школа; — ледовый дворец; — автобусные остановки. условия аренды: — длительный срок аренды; — предпочтения: семейным, без вредных привычек, без животных. заинтересовались? остались вопросы? мы работаем для вас без выходных! звоните прямо сейчас. пишите. почему стоит выбрать эту квартиру? это отличное сочетание комфорта, удобства и развитой инфраструктуры. здесь вы найдете всё необходимое для спокойной жизни: уютную квартиру с ремонтом, мебелью и техникой, а также все городские блага в пешей доступности. не упустите возможность арендовать эту квартиру на выгодных условиях!2 июля 2025 состояние/комплектация, жку понятны. минусы: без животных, высокая комиссия">
-<td data-label="Место"><span class="rank">18</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">42.7</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 46 м², 1/5 эт.</div><div class="address">Профсоюзная ул., 11</div><div class="terms">Залог 32 000 ₽ · Комиссия 100% · Счетчики включены · ЖКУ 9 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">187 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">41 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>32 000 ₽</b></td>
-<td data-label="Комиссия"><b>32 000 ₽</b></td>
-<td data-label="ЖКУ"><b>9 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>44 мин</b></div><div>Работа Оли: <b>44 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны. Минусы: без животных, высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._kvartira_46_m_15_et._7515936114?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJWSE44V3U3MjF1R1pKTGRDIjt97HXjpj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="19" data-total="225000" data-work="42" data-home="53" data-monthly="50000" data-text="2-к. квартира, 46 м², 1/5 эт. москва болотниковская ул., 46 к 2 залог 50 000 ₽ · комиссия 50% · жку включены без счетчиков сдается уютная двухкомнатная квартира на длительный срок. комнаты смежные, что обеспечивает комфортное проживание. в квартире выполнен косметический ремонт, стены украшены обоями с узорами, а полы покрыты паркетным покрытием. кухня оборудована необходимой техникой, включая холодильник и газовую плиту. в комнате установлены шкафы для хранения вещей. санузел совмещенный, оснащен современной сантехникой. квартира расположена на первом этаже панельного дома, что делает ее доступной для семей с детьми и владельцев домашних животных. во дворе имеется открытая парковка, где всегда можно найти место для автомобиля. дом находится в тихом районе с зелеными насаждениями, что создает атмосферу уединения и спокойствия. коммунальные услуги оплачиваются арендатором по счетчикам. залог составляет 48000 рублей. курение в квартире запрещено, но допускается проживание с детьми и домашними животными.7 дней назад состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">19</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">40.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 46 м², 1/5 эт.</div><div class="address">Москва Болотниковская ул., 46 к 2</div><div class="terms">Залог 50 000 ₽ · Комиссия 50% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">225 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>25 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>53 мин</b></div><div>Работа Оли: <b>42 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_46_m_15_et._8085277165?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJrSlI0TnY3T0VhazI2dkZJIjt9hQTFLT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="20" data-total="230000" data-work="43" data-home="24" data-monthly="50000" data-text="2-к. квартира, 43 м², 2/5 эт. московский жемчужная ул., 1 к 2 залог 50 000 ₽ · комиссия 60% · жку включены без счетчиков сдаётся двухкомнатная квартира на длительный срок. комиссия составляет 60% от месячной платы. залог — 50,000 рублей. коммунальные услуги оплачиваются арендатором по счётчикам. проживание с детьми разрешено, но животные маленькие обговаривается. квартира расположена на втором этаже монолитно-кирпичного дома с грузовым лифтом. в квартире выполнен косметический ремонт, комнаты изолированы. из мебели имеются шкафы и диван, а также холодильник и стиральная машина. в гостиной установлен удобный диван и кресло, есть обеденный стол. кухня совмещена с гостиной, оснащена необходимой техникой, включая плиту и микроволновку. санузел совмещённый, оборудован душевой кабиной и стиральной машиной. доступ к кабельному/цифровому телевидению.вчера состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">20</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">40.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 43 м², 2/5 эт.</div><div class="address">Московский Жемчужная ул., 1 к 2</div><div class="terms">Залог 50 000 ₽ · Комиссия 60% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">230 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>30 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskovskaya_oblast_moskovskiy/kvartiry/2-k._kvartira_43_m_25_et._8061941197?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJXNThsUVdLVnA1cmRPek5FIjt9Mw9cwj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="21" data-total="230000" data-work="47" data-home="44" data-monthly="50000" data-text="2-комн. квартира, 44 м², 5/9 этаж москва, юао, р-н нагатинский затон, м. коломенская, кленовый бульвар, 10к1 от года, комм. платежи включены (счётчики включены), комиссия 60%, залог 50 000 ₽ предлагаем в аренду на длительный срок 2-комнатную квартиру в 10 минутах пешей доступности от метро коломенская. комнаты изолированные. квартира в чистом жилом состоянии, на окнах установлены стеклопакеты, балкон застеклен. квартира укомплектована необходимой мебелью и оснащена бытовой техникой. оперативный показ и заселение. рассмотрим семью, можно с реб., 2 женщ. ----- примечание: у собственника могут быть дополнительные пожелания к жильцам - обсудите их в чате или по телефону без комиссии, состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">21</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">39</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 44 м², 5/9 этаж</div><div class="address">Москва, ЮАО, р-н Нагатинский затон, м. Коломенская, Кленовый бульвар, 10К1</div><div class="terms">От года, комм. платежи включены (счётчики включены), комиссия 60%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">230 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>30 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>44 мин</b></div><div>Работа Оли: <b>47 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/277834124/?context=4.45y1KTkCUgA.kuRUp7_ox5Xgc6BAJMEkbXr7UuXWFmvawCMX4J4TBFlOqBL5qAizqTJqHm9Kfsou8rWf1L6TNwk-uQ&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="22" data-total="235000" data-work="45" data-home="35" data-monthly="50000" data-text="2-комн. квартира, 36 м², 4/9 этаж москва, зао, р-н филевский парк, м. багратионовская, барклая улица, 16к2 от года, комм. платежи включены (без счётчиков), комиссия 70%, залог 50 000 ₽ выгодное предложение!!! квартира свободна!!! не более 3 человек!!!сдается простая,чистая квартира на длительный срок,комнаты смежные,сан узел совместный,есть балкон,от метро 2 минуты пешком.есть вся необходимая мебель и бытовая техника, в большой комнате и на кухне был косметический ремонт,, фото кухни будет позже . рассмотрим семейные пары,можно одиночек,можно с детьми,животные обсуждаются индивидуально . состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">22</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">38.9</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 36 м², 4/9 этаж</div><div class="address">Москва, ЗАО, р-н Филевский парк, м. Багратионовская, Барклая улица, 16К2</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 70%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">235 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>35 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>35 мин</b></div><div>Работа Оли: <b>45 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/273742340/?context=4.mmm8k8XJg8c.a47wrkMd8mZT2Y4qm3BdJ5LeaVDT84Yc1X3ppIj8JkPEglnPr6AA9E-6JJA5JEVG9sC4Vb_eVwTzPA&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="C" data-rank="23" data-total="230000" data-work="39" data-home="55" data-monthly="50000" data-text="2-к. квартира, 67 м², 3/5 эт. москва озёрная ул., 2/12 залог 50 000 ₽ · комиссия 60% · жку включены без счетчиков 2 огромные изолированные комнаты.вчера состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">23</span></td>
-<td data-label="Оценка"><span class="grade C">C</span><span class="score">38.4</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 67 м², 3/5 эт.</div><div class="address">Москва Озёрная ул., 2/12</div><div class="terms">Залог 50 000 ₽ · Комиссия 60% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">230 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>30 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>55 мин</b></div><div>Работа Оли: <b>39 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_67_m_35_et._8205521490?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJJeGNyRWtndTdQZUpLbGxtIjt9lcuMLz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="24" data-total="225000" data-work="57" data-home="51" data-monthly="50000" data-text="2-комн. квартира, 42 м², 8/9 этаж москва, ювао, р-н текстильщики, м. волжская, улица малышева, 30 от года, комм. платежи включены (счётчики включены), комиссия 50%, залог 50 000 ₽ сдается на длительный срок, чистая, уютная 2-х комнатная квартира, комнаты изолированные, в пешей доступности м. волжская, мцд печатники, рядом находится парк шкулева, пруды, развитая инфраструктура, рассматривают аккуратных, платежеспособных, желательно семейную пару, 2-3 человека. состояние/комплектация, жку понятны">
-<td data-label="Место"><span class="rank">24</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">37.9</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 42 м², 8/9 этаж</div><div class="address">Москва, ЮВАО, р-н Текстильщики, м. Волжская, улица Малышева, 30</div><div class="terms">От года, комм. платежи включены (счётчики включены), комиссия 50%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">225 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>25 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>51 мин</b></div><div>Работа Оли: <b>57 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/295938622/?context=4.ydDoeG4V4gA.hpZ2qKBFPLQlbfDiejdrM3gcx-znPs-dsa3ilaxtEZxid1bSbdEhdSr8Huy8Oo7UsR7dSqRRgqdBdQ&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="25" data-total="250000" data-work="57" data-home="1" data-monthly="55000" data-text="2-к. квартира, 55 м², 11/17 эт. москва ул. маршала захарова, 12 к 1 залог 50 000 ₽ · комиссия 70% · жку 5 000 ₽ + счетчики сдается уютная двухкомнатная квартира на длительный срок. коммунальные услуги оплачиваются отдельно. возможно проживание с детьми и домашними животными. квартира расположена на 11 этаже панельного дома 1988 года постройки. в доме есть мусоропровод и грузовой лифт. из окон открывается приятный вид на двор, где находится спортивная площадка. в квартире выполнен косметический ремонт. комнаты изолированные, что обеспечивает комфорт и приватность. кухня площадью 8 м² оборудована необходимой техникой, включая телевизор. санузел раздельный, что добавляет удобства. лоджия станет отличным местом для отдыха. парковка открытая во дворе.3 дня назад состояние/комплектация">
-<td data-label="Место"><span class="rank">25</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">37.8</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 55 м², 11/17 эт.</div><div class="address">Москва ул. Маршала Захарова, 12 к 1</div><div class="terms">Залог 50 000 ₽ · Комиссия 70% · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">250 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">55 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>35 000 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>1 мин</b></div><div>Работа Оли: <b>57 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_55_m_1117_et._8204960773?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJKaUNwd1VjdjIwUE8yTGczIjt9y_PL-T8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="26" data-total="240000" data-work="29" data-home="56" data-monthly="55000" data-text="2-к. квартира, 40 м², 8/14 эт. москва ул. лобачевского, 74 залог 50 000 ₽ · комиссия 50% · жку 5 000 ₽ + счетчики с уважением ко, сдаётся двухкомнатная квартира с изолированными комнатами на очень длительный срок! вся необходимая мебель, техника есть! залог при необходимости разобьют на 2 месяца. у собственника могут быть дополнительные пожелания к арендаторам. их лучше обсудить заранее: в чате или по телефону.7 дней назад без комиссии, состояние/комплектация">
-<td data-label="Место"><span class="rank">26</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">37</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 40 м², 8/14 эт.</div><div class="address">Москва ул. Лобачевского, 74</div><div class="terms">Залог 50 000 ₽ · Комиссия 50% · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">240 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">55 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>25 000 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>56 мин</b></div><div>Работа Оли: <b>29 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_40_m_814_et._8061416158?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJuajVCelFHa2o2bzlaOXJKIjt95M4eZD8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="27" data-total="231500" data-work="59" data-home="21" data-monthly="50000" data-text="2-к. квартира, 56 м², 13/16 эт. д. подолино мкр-н велтон парк новая сходня, беговая ул., 12 залог 50 000 ₽ · комиссия 70% · жку 5 000 ₽ + счетчики вашему вниманию! залог можно разбить по договоренности! предлагается просторная евро 2-х комнатная квартира с дизайнерским ремонтом. очень удобная планировка: панорамные окна, отдельная гардеробная, просторный совмещенный санузел. квартира оснащена всей необходимой бытовой техникой и мебелью. квартира современная и уютная! современный жк с развитой инфраструктурой! расположенность, рядом магазины со всем необходимым, в шаговой доступности, есть все, что нужно для жизни. остановка общественного транспорта в пешей доступности. оперативный показ.1 неделю назад состояние/комплектация">
-<td data-label="Место"><span class="rank">27</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">35.6</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 56 м², 13/16 эт.</div><div class="address">д. Подолино мкр-н Велтон Парк Новая Сходня, Беговая ул., 12</div><div class="terms">Залог 50 000 ₽ · Комиссия 70% · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">231 500 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>31 500 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>21 мин</b></div><div>Работа Оли: <b>59 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/himki/kvartiry/2-k._kvartira_56_m_1316_et._8088874946?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJUT2VPcUJYUVR3TEQ0b3JqIjt9hahDWT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="28" data-total="202500" data-work="64" data-home="47" data-monthly="45000" data-text="2-комн. квартира, 48 м², 1/5 этаж москва, вао, р-н новогиреево, м. новогиреево, зеленый проспект, 65 от года, комм. платежи включены (без счётчиков), комиссия 50%, залог 45 000 ₽ шкаф, кровать, стол, кухонный набор, холодильник, стиральная машина. жку понятны">
-<td data-label="Место"><span class="rank">28</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">34.8</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 48 м², 1/5 этаж</div><div class="address">Москва, ВАО, р-н Новогиреево, м. Новогиреево, Зеленый проспект, 65</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 50%, залог 45 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">202 500 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">45 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>45 000 ₽</b></td>
-<td data-label="Комиссия"><b>22 500 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>47 мин</b></div><div>Работа Оли: <b>1 ч 4 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/329610500/?context=4.AUq8My-R2Zs.J1VkeCBaRDRfqqu_Vr5fR__1fqf6gJboUOou3DXu5gvPhcI67aRmpSOaIkKQ0Qu1VNlORm8MmBAbOw&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="29" data-total="240000" data-work="58" data-home="45" data-monthly="50000" data-text="2-к. квартира, 43 м², 5/5 эт. москва ул. артюхиной, 20 а залог 50 000 ₽ · комиссия 80% · жку включены без счетчиков сдаётся уютная двухкомнатная квартира на длительный срок. залог составляет 50,000 рублей. коммунальные услуги оплачиваются арендатором по счётчикам. допускается проживание с детьми и домашними животными. квартира расположена на пятом этаже кирпичного дома, построенного в 1960 году. в доме есть газоснабжение. комнаты смежные, что обеспечивает комфортное проживание. в квартире выполнен косметический ремонт, а также имеется кабельное/цифровое телевидение. кухня площадью 7 квадратных метров оснащена необходимой мебелью. санузел совмещённый, оборудован современной сантехникой. из окон открывается приятный вид на двор, где находится спортивная площадка. парковка открытая во дворе, что удобно для владельцев автомобилей. лоджия добавляет дополнительное пространство для отдыха или хранения вещей.вчера состояние/комплектация, жку понятны. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">29</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">33</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 43 м², 5/5 эт.</div><div class="address">Москва ул. Артюхиной, 20 А</div><div class="terms">Залог 50 000 ₽ · Комиссия 80% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">240 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>40 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>45 мин</b></div><div>Работа Оли: <b>58 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_43_m_55_et._8205147747?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJvUnZxMllRcGxKQWx2UGFRIjt9sGmMij8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="30" data-total="200000" data-work="34" data-home="49" data-monthly="50000" data-text="2-к. квартира, 106 м², 15/25 эт. москва балаклавский пр-т, 15 без залога · комиссия 100% · жку включены без счетчиков сдается квартира площадью 106 м. на длительный срок. рассмотрим всех.9 часов назад жку понятны, низкий залог. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">30</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">32.7</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 106 м², 15/25 эт.</div><div class="address">Москва Балаклавский пр-т, 15</div><div class="terms">Без залога · Комиссия 100% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">200 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>50 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>49 мин</b></div><div>Работа Оли: <b>34 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны, низкий залог. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_106_m_1525_et._8147864433?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJNc3p3NlNSUG9Xb0ZpbWFQIjt9OMpoqT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="X" data-rank="31" data-total="93000" data-work="58" data-home="35" data-monthly="30000" data-text="2-к. квартира, 33,8 м², 10/32 эт. москва ул. барклая, 6 ак 2 залог 3 000 ₽ · без комиссии · все жку включены сдается квартира в жилом доме под склад техники, мебели, стройматериалов и так далее. торг возможен.1 неделю назад без комиссии, жку понятны, низкий залог. минусы: под склад, не нормальное жилье">
-<td data-label="Место"><span class="rank">31</span></td>
-<td data-label="Оценка"><span class="grade X">X</span><span class="score">32.1</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 33,8 м², 10/32 эт.</div><div class="address">Москва ул. Барклая, 6 Ак 2</div><div class="terms">Залог 3 000 ₽ · Без комиссии · Все ЖКУ включены</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">93 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">30 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>3 000 ₽</b></td>
-<td data-label="Комиссия"><b>0 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>35 мин</b></div><div>Работа Оли: <b>58 мин</b></div></td>
-<td data-label="Комментарий" class="why">без комиссии, ЖКУ понятны, низкий залог. Минусы: под склад, не нормальное жилье</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_338_m_1032_et._8129326804?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJCdXZQdWdwNHdjTVhFSk5OIjt9pwgnWz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="32" data-total="260000" data-work="43" data-home="24" data-monthly="60000" data-text="2-к. квартира, 60,1 м², 13/17 эт. 33 к 1 залог 50 000 ₽ · комиссия 60% · жку 10 000 ₽ + счетчики сдаётся 2 х комн. квартира, ранее не сдавалась. в квартире имеется вся необходимая мебель и техника, по необходимости готовы рассмотреть приобретение дополнительной мебели и техники. цена: 50,000 руб. + полностью коммуналка~10-11 тыс. залог: 50,000 руб. (можно разбить на 2 а месяца). комиссия: 60% (30,000 руб.). просмотры по договоренности!12 апреля 21:50 состояние/комплектация">
-<td data-label="Место"><span class="rank">32</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">30.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 60,1 м², 13/17 эт.</div><div class="address">33 к 1</div><div class="terms">Залог 50 000 ₽ · Комиссия 60% · ЖКУ 10 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">260 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">60 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>30 000 ₽</b></td>
-<td data-label="ЖКУ"><b>10 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>24 мин</b></div><div>Работа Оли: <b>43 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/gorki-10/kvartiry/2-k._kvartira_601_m_1317_et._8056911673?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJWaHhZM2h3UGIzdmJqaTNtIjt9mvQ83T8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="33" data-total="200000" data-work="53" data-home="50" data-monthly="50000" data-text="2-к. квартира, 50 м², 6/12 эт. москва барвихинская ул., 10 без залога · комиссия 100% · жку включены без счетчиков вашему вниманию рассматриваем. платежеспособных и чистоплотных. жильцов і светлая і просторная і. уютная. сдаётся на длительный срок 2 х-комнатная квартира. квартира только с самой нужной техникой, без мебели. при надобности что то можно докупить. развитая инфраструктура района. рядом с домом расположено все необходимое: детский сад. продуктовые. аптеки. кафе и рестораны. спортивный зал. спокойные соседи и замечательная хозяйка квартиры. оперативный показ. заселение день в день. звонить и писать в любое время.7 дней назад жку понятны, низкий залог. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">33</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">29.2</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 50 м², 6/12 эт.</div><div class="address">Москва Барвихинская ул., 10</div><div class="terms">Без залога · Комиссия 100% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">200 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>50 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>50 мин</b></div><div>Работа Оли: <b>53 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны, низкий залог. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_50_m_612_et._8150560406?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiIxekF4eTRvTkhjZVV6emZ5Ijt9DRm7lz8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="34" data-total="195000" data-work="53" data-home="53" data-monthly="50000" data-text="2-к. квартира, 49 м², 4/5 эт. москва кавказский б-р, 8 без залога · комиссия 100% · жку 5 000 ₽ + счетчики сдаётся 2 комнатная квартира с мебелью и техникой в пешей доступности от метро. сдаётся на длительный срок. рядом с домом остановка, стоянка и магазины. звоните!3 дня назад низкий залог. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">34</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">29</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 49 м², 4/5 эт.</div><div class="address">Москва Кавказский б-р, 8</div><div class="terms">Без залога · Комиссия 100% · ЖКУ 5 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">195 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>0 ₽</b></td>
-<td data-label="Комиссия"><b>45 000 ₽</b></td>
-<td data-label="ЖКУ"><b>5 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>53 мин</b></div><div>Работа Оли: <b>53 мин</b></div></td>
-<td data-label="Комментарий" class="why">низкий залог. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_49_m_45_et._8131445589?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJLU2FEMTJTSFRLd3NVcVZuIjt9I9Bmuj8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="35" data-total="211500" data-work="45" data-home="40" data-monthly="45000" data-text="2-комн. квартира, 43 м², 5/5 этаж москва, зао, р-н можайский, м. рабочий посёлок, улица маршала неделина, 22 от года, комм. платежи включены (без счётчиков), комиссия 70%, залог 45 000 ₽  жку понятны. минусы: мало описания">
-<td data-label="Место"><span class="rank">35</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">27.9</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 43 м², 5/5 этаж</div><div class="address">Москва, ЗАО, р-н Можайский, м. Рабочий посёлок, улица Маршала Неделина, 22</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 70%, залог 45 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">211 500 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">45 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>45 000 ₽</b></td>
-<td data-label="Комиссия"><b>31 500 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>40 мин</b></div><div>Работа Оли: <b>45 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны. Минусы: мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/329843149/?context=4.SdZmxw-oO1I.29IW9HL_fEuuEHD_tgiO9sFRwSKfFDJIAOvRVikm_gG9G4oG94y9dTDZW8rsA_lXnW-oprUg2pc8sg&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="36" data-total="177500" data-work="42" data-home="49" data-monthly="45000" data-text="2-комн. квартира, 50 м², 7/9 этаж москва, юао, р-н чертаново центральное, м. южная, днепропетровская улица, 3к4 на несколько месяцев, комм. платежи включены (без счётчиков), комиссия 50%, залог 20 000 ₽  жку понятны, низкий залог. минусы: на несколько месяцев, мало описания">
-<td data-label="Место"><span class="rank">36</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">22.9</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 50 м², 7/9 этаж</div><div class="address">Москва, ЮАО, р-н Чертаново Центральное, м. Южная, Днепропетровская улица, 3К4</div><div class="terms">На несколько месяцев, комм. платежи включены (без счётчиков), комиссия 50%, залог 20 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">177 500 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">45 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>20 000 ₽</b></td>
-<td data-label="Комиссия"><b>22 500 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>49 мин</b></div><div>Работа Оли: <b>42 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны, низкий залог. Минусы: на несколько месяцев, мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/329998707/?context=4.X9IS3Sz2zMc.8opWJgWnNVJkntZJ_JKWtEPVxOPoi_F_XDCHjbnvycJ-jqCU2feCxqIB5YaCPRQHGCbbw1Bdv4Nffw&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="37" data-total="250000" data-work="54" data-home="40" data-monthly="50000" data-text="2-к. квартира, 47 м², 4/9 эт. москва мосфильмовская ул., 34 залог 50 000 ₽ · комиссия 100% · жку включены без счетчиков в ожидании своих жильцов уютная, двухкомнатная квартира с косметическим ремонтом. комнаты смежные! аккуратная гарнитурная кухня с полным комплектом бытовой техники. комнаты располагают необходимой жилой мебелью. санузел совмещённый. удачное расположение дома. удобный выезд на ломоносовский и мичуринский проспект, рядом метро киевская и университет, ломоносовский проспект, третье транспортное кольцо, возле дома автобусная остановка. в шаговой доступности мосфильм, гольф клуб, яблоневый сад, воробьевы горы, школа, детский сад, магазины. оперативный показ.4 часа назад состояние/комплектация, жку понятны. минусы: высокая комиссия">
-<td data-label="Место"><span class="rank">37</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">22.7</span></td>
-<td data-label="Квартира"><div class="title">2-к. квартира, 47 м², 4/9 эт.</div><div class="address">Москва Мосфильмовская ул., 34</div><div class="terms">Залог 50 000 ₽ · Комиссия 100% · ЖКУ включены без счетчиков</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">250 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>50 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>40 мин</b></div><div>Работа Оли: <b>54 мин</b></div></td>
-<td data-label="Комментарий" class="why">состояние/комплектация, ЖКУ понятны. Минусы: высокая комиссия</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/moskva/kvartiry/2-k._kvartira_47_m_49_et._8161071401?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiIxNk1haE1BamxScHM4NXViIjt9j398kT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="38" data-total="235000" data-work="42" data-home="49" data-monthly="50000" data-text="2-комн. квартира, 46 м², 6/9 этаж москва, юао, р-н чертаново северное, м. южная, кировоградская улица, 10к2 от года, комм. платежи включены (без счётчиков), комиссия 70%, залог 50 000 ₽  жку понятны. минусы: мало описания">
-<td data-label="Место"><span class="rank">38</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">21</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 46 м², 6/9 этаж</div><div class="address">Москва, ЮАО, р-н Чертаново Северное, м. Южная, Кировоградская улица, 10К2</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 70%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">235 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>35 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>49 мин</b></div><div>Работа Оли: <b>42 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны. Минусы: мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/313095733/?context=4.gkk0yM5zq7k.oJ4TYi0fMXXfgSlx9AmfkidmYf8xtLGuL7Nob6s6S2094mXMB9JJw0O7BqYP10YjSKpbiVT0TwrZSA&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="39" data-total="230000" data-work="53" data-home="54" data-monthly="50000" data-text="2-комн. квартира, 40 м², 5/5 этаж москва, юао, р-н царицыно, м. кантемировская, кавказский бульвар, 3/2 от года, комм. платежи включены (без счётчиков), комиссия 60%, залог 50 000 ₽  жку понятны. минусы: мало описания">
-<td data-label="Место"><span class="rank">39</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">20.2</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 40 м², 5/5 этаж</div><div class="address">Москва, ЮАО, р-н Царицыно, м. Кантемировская, Кавказский бульвар, 3/2</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 60%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">230 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>30 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>54 мин</b></div><div>Работа Оли: <b>53 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны. Минусы: мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/329699729/?context=4.qrXBfU4onOY.2qSlYLKW8L-EGWLYYgd410cOWhd_Z2v-syuTx2z2q6L29-OiSe43yJCue94pfGYLZhz3yOfoM1aDOQ&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="40" data-total="240000" data-work="34" data-home="54" data-monthly="50000" data-text="2-комн. квартира, 46 м², 1/5 этаж москва, юзао, р-н зюзино, м. зюзино, перекопская улица, 18 от года, комм. платежи включены (без счётчиков), комиссия 80%, залог 50 000 ₽  жку понятны. минусы: высокая комиссия, мало описания">
-<td data-label="Место"><span class="rank">40</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">19.6</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 46 м², 1/5 этаж</div><div class="address">Москва, ЮЗАО, р-н Зюзино, м. Зюзино, Перекопская улица, 18</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 80%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">240 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>40 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>54 мин</b></div><div>Работа Оли: <b>34 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны. Минусы: высокая комиссия, мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/330006621/?context=4.aJTn8ZYvTqI.WrmLym4oV4H5h5nsgY2N0H66sxLlIcmsO6RAnTbIFQHOLBTl5QFb9EQOEPNt6ZZAM6McUishmqQhJQ&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="41" data-total="250000" data-work="54" data-home="35" data-monthly="50000" data-text="2-комн. квартира, 45 м², 5/5 этаж москва, зао, р-н филевский парк, м. филёвский парк, улица алябьева, 8 от года, комм. платежи включены (без счётчиков), комиссия 100%, залог 50 000 ₽  жку понятны. минусы: высокая комиссия, мало описания">
-<td data-label="Место"><span class="rank">41</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">7.5</span></td>
-<td data-label="Квартира"><div class="title">2-комн. квартира, 45 м², 5/5 этаж</div><div class="address">Москва, ЗАО, р-н Филевский парк, м. Филёвский парк, улица Алябьева, 8</div><div class="terms">От года, комм. платежи включены (без счётчиков), комиссия 100%, залог 50 000 ₽</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">250 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">50 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>50 000 ₽</b></td>
-<td data-label="Комиссия"><b>50 000 ₽</b></td>
-<td data-label="ЖКУ"><b>0 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>35 мин</b></div><div>Работа Оли: <b>54 мин</b></div></td>
-<td data-label="Комментарий" class="why">ЖКУ понятны. Минусы: высокая комиссия, мало описания</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.cian.ru/rent/flat/283428117/?context=4.QRU3S4UT6Js.B7YjFQZQhVnZ_rjsmyoQwXCp3teTpHyJVh0MJou3wL5Gt1lNh-HL8yOqzr3DtyEO0PZPC9KDmQUx3g&amp;mlSearchSessionGuid=37c9cfc8b6816ff872f596707b2b0001" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr>
-<tr data-grade="D" data-rank="42" data-total="325000" data-work="46" data-home="22" data-monthly="75000" data-text="2-к. апартаменты, 104 м², 4/9 эт. ул. маршала г.к. жукова, 13 залог 75 000 ₽ · комиссия 50% · жку 25 000 ₽ + счетчики сдается квартира на длительный срок в центре города. солнечная сторона. просторная уютная.27 марта 01:51 обычный вариант">
-<td data-label="Место"><span class="rank">42</span></td>
-<td data-label="Оценка"><span class="grade D">D</span><span class="score">3.4</span></td>
-<td data-label="Квартира"><div class="title">2-к. апартаменты, 104 м², 4/9 эт.</div><div class="address">ул. Маршала Г.К. Жукова, 13</div><div class="terms">Залог 75 000 ₽ · Комиссия 50% · ЖКУ 25 000 ₽ + счетчики</div></td>
-<td data-label="Всего за 3 месяца" class="money primaryMoney">325 000 ₽<span>аренда 3 мес + залог + комиссия + известные ЖКУ</span></td>
-<td data-label="Платеж в месяц" class="money">75 000 ₽<span>аренда + известные ЖКУ</span></td>
-<td data-label="Залог"><b>75 000 ₽</b></td>
-<td data-label="Комиссия"><b>25 000 ₽</b></td>
-<td data-label="ЖКУ"><b>25 000 ₽</b><span class="cellNote">счетчики могут быть отдельно</span></td>
-<td data-label="Дорога"><div>Родина: <b>22 мин</b></div><div>Работа Оли: <b>46 мин</b></div></td>
-<td data-label="Комментарий" class="why">обычный вариант</td>
-<td data-label="Ссылка"><a class="openBtn" href="https://www.avito.ru/naro-fominsk/kvartiry/2-k._apartamenty_104_m_49_et._7953130245?context=H4sIAAAAAAAA_wE_AMD_YToyOntzOjEzOiJsb2NhbFByaW9yaXR5IjtiOjA7czoxOiJ4IjtzOjE2OiJUT2VPcUJYUVR3TEQ0b3JqIjt9hahDWT8AAAA" target="_blank" rel="noreferrer">Открыть</a></td>
-</tr></tbody></table></section><p class="note">Рейтинг ориентировочный: он помогает быстро выбрать топ, но перед звонком лучше открыть объявление и проверить фото, актуальность, счетчики и точные условия договора.</p></main><script>const q=document.getElementById('q'),grade=document.getElementById('grade'),sort=document.getElementById('sort'),tbody=document.querySelector('#tbl tbody');function apply(){const term=q.value.trim().toLowerCase();const g=(grade.value||'').charAt(0);const rows=[...tbody.querySelectorAll('tr')];rows.sort((a,b)=>{const s=sort.value;if(s==='rank')return +a.dataset.rank-+b.dataset.rank;return +a.dataset[s]-+b.dataset[s]});rows.forEach(r=>{const ok=(!term||r.dataset.text.includes(term))&&(!g||r.dataset.grade===g);r.classList.toggle('hidden',!ok);tbody.appendChild(r)})}q.addEventListener('input',apply);grade.addEventListener('input',apply);sort.addEventListener('input',apply);</script></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Объявления</title>
+  <style>
+    :root{--bg:#f5f6f8;--panel:#fff;--text:#17202a;--muted:#667789;--line:#dde5ee;--accent:#0f6fde;--green:#16825d;--amber:#a15c00;--red:#b42318;--shadow:0 10px 24px rgba(26,39,58,.07)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45}
+    header{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}.head{max-width:1440px;margin:0 auto;padding:20px 24px;display:flex;justify-content:space-between;gap:18px;align-items:flex-start}
+    h1{margin:0 0 6px;font-size:28px;letter-spacing:0}.lead{margin:0;color:var(--muted)}.adminLink{display:inline-flex;align-items:center;min-height:38px;padding:0 14px;border-radius:8px;background:var(--text);color:#fff;text-decoration:none;font-weight:800;white-space:nowrap}
+    main{max-width:1440px;margin:0 auto;padding:18px 24px 36px}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:#334155}
+    .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 180px 220px;gap:10px;margin-bottom:14px}.toolbar input,.toolbar select{height:42px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 12px}
+    .tableShell{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:auto}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{font-size:11px;text-transform:uppercase;color:#52606d;background:#f9fbfd;position:sticky;top:79px;z-index:2}tbody tr:hover{background:#fbfdff}tbody tr:last-child td{border-bottom:0}
+    .title{font-weight:800}.muted{display:block;color:var(--muted);font-size:12px;margin-top:4px}.money{font-weight:800;white-space:nowrap}.grade{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;color:#fff;font-weight:800;background:var(--accent)}.grade.A{background:var(--green)}.grade.B{background:var(--accent)}.grade.C{background:var(--amber)}.grade.D,.grade.X{background:var(--red)}
+    .openBtn{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:7px;background:var(--accent);color:#fff;text-decoration:none;font-weight:800}.empty{background:#fff;border:1px dashed var(--line);border-radius:8px;padding:28px;text-align:center;color:var(--muted)}
+    @media(max-width:860px){header{position:static}.head{display:block;padding:18px 14px}.adminLink{margin-top:14px}.toolbar{grid-template-columns:1fr}main{padding:12px 10px 28px}.tableShell{border:0;background:transparent;box-shadow:none;overflow:visible}table,thead,tbody,tr,th,td{display:block}table{min-width:0}thead{display:none}tbody{display:grid;gap:12px}tr{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:12px}td{border:0;padding:8px 0;display:grid;grid-template-columns:118px 1fr;gap:10px}td:before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}.openBtn{width:100%}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head">
+      <div>
+        <h1>Объявления</h1>
+        <p class="lead">Список объектов загружается из базы сайта. Данные можно обновить в панели управления.</p>
+      </div>
+      <a class="adminLink" href="/admin">Панель управления</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="stats" id="stats"></div>
+    <div class="toolbar">
+      <input id="q" placeholder="Поиск: адрес, метро, описание">
+      <select id="grade">
+        <option value="">Все оценки</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="D">D</option>
+        <option value="X">X</option>
+      </select>
+      <select id="sort">
+        <option value="default">Как в файле</option>
+        <option value="total">Дешевле всего</option>
+        <option value="monthly">Дешевле в месяц</option>
+        <option value="score">Лучший рейтинг</option>
+      </select>
+    </div>
+
+    <section class="tableShell" id="tableShell">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Оценка</th><th>Объект</th><th>Цена</th><th>Залог</th><th>Комиссия</th><th>ЖКУ</th><th>Дорога</th><th>Комментарий</th><th>Ссылка</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+    <div class="empty" id="empty" hidden>Пока нет объявлений. Загрузите JSON-файл в панели управления.</div>
+  </main>
+
+  <script>
+    const state = { items: [], filtered: [] };
+    const rows = document.querySelector("#rows");
+    const stats = document.querySelector("#stats");
+    const empty = document.querySelector("#empty");
+    const tableShell = document.querySelector("#tableShell");
+    const q = document.querySelector("#q");
+    const grade = document.querySelector("#grade");
+    const sort = document.querySelector("#sort");
+
+    load();
+    q.addEventListener("input", render);
+    grade.addEventListener("change", render);
+    sort.addEventListener("change", render);
+
+    async function load() {
+      const response = await fetch("/api/listings");
+      const data = await response.json();
+      state.items = Array.isArray(data.items) ? data.items : [];
+      renderStats(data);
+      render();
+    }
+
+    function renderStats(data) {
+      const source = data.sourceFile ? `Файл: ${escapeHtml(data.sourceFile)}` : "Файл не загружен";
+      const updated = data.updatedAt ? `Обновлено: ${new Date(data.updatedAt).toLocaleString("ru-RU")}` : "База пока пустая";
+      stats.innerHTML = `<span class="pill">Объектов: ${state.items.length}</span><span class="pill">${source}</span><span class="pill">${updated}</span>`;
+    }
+
+    function render() {
+      const query = q.value.trim().toLowerCase();
+      const wantedGrade = grade.value;
+      let items = state.items.filter((item) => {
+        const haystack = [item.title, item.address, item.metro, item.terms, item.description].join(" ").toLowerCase();
+        return (!query || haystack.includes(query)) && (!wantedGrade || item.grade === wantedGrade);
+      });
+
+      const sortBy = sort.value;
+      if (sortBy === "total") items = items.slice().sort((a, b) => numberOrMax(a.total) - numberOrMax(b.total));
+      if (sortBy === "monthly") items = items.slice().sort((a, b) => numberOrMax(a.monthly) - numberOrMax(b.monthly));
+      if (sortBy === "score") items = items.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+
+      rows.innerHTML = items.map(rowTemplate).join("");
+      empty.hidden = items.length > 0;
+      tableShell.hidden = items.length === 0;
+    }
+
+    function rowTemplate(item, index) {
+      const grade = item.grade || "-";
+      const price = item.monthly ? money(item.monthly) : item.price || "-";
+      const link = item.url ? `<a class="openBtn" href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">Открыть</a>` : "<span class='muted'>Нет ссылки</span>";
+      const commute = [item.commuteHome && `Дом: <b>${escapeHtml(item.commuteHome)}</b>`, item.commuteWork && `Работа: <b>${escapeHtml(item.commuteWork)}</b>`].filter(Boolean).join("<br>") || "-";
+      return `<tr>
+        <td data-label="#"><b>${index + 1}</b></td>
+        <td data-label="Оценка"><span class="grade ${escapeAttr(grade)}">${escapeHtml(grade)}</span>${item.score ? `<span class="muted">${item.score}</span>` : ""}</td>
+        <td data-label="Объект"><div class="title">${escapeHtml(item.title)}</div><span class="muted">${escapeHtml([item.address, item.metro].filter(Boolean).join(" · "))}</span><span class="muted">${escapeHtml(item.terms)}</span></td>
+        <td data-label="Цена" class="money">${escapeHtml(price)}${item.total ? `<span class="muted">Всего: ${money(item.total)}</span>` : ""}</td>
+        <td data-label="Залог">${item.deposit ? money(item.deposit) : "-"}</td>
+        <td data-label="Комиссия">${item.commission ? money(item.commission) : "-"}</td>
+        <td data-label="ЖКУ">${item.utilities ? money(item.utilities) : "-"}</td>
+        <td data-label="Дорога">${commute}</td>
+        <td data-label="Комментарий">${escapeHtml(shorten(item.description, 180))}</td>
+        <td data-label="Ссылка">${link}</td>
+      </tr>`;
+    }
+
+    function numberOrMax(value) { return Number(value) > 0 ? Number(value) : Number.MAX_SAFE_INTEGER; }
+    function money(value) { return `${Number(value).toLocaleString("ru-RU")} ₽`; }
+    function shorten(value, limit) { const text = String(value || ""); return text.length > limit ? `${text.slice(0, limit - 1)}…` : text; }
+    function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch])); }
+    function escapeAttr(value) { return escapeHtml(value).replace(/`/g, "&#96;"); }
+  </script>
+</body>
+</html>

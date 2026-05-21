@@ -1,13 +1,8 @@
 ﻿import http from 'node:http';
 
-<<<<<<< HEAD
-const PORT = Number(process.env.PORT || 4173);
-const MAX_PORT_ATTEMPTS = 10;
-=======
 const PORT = Number(globalThis.process?.env?.PORT || 4173);
 const MAX_PORT_ATTEMPTS = 10;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
 
 function htmlResponse(res, html) {
   res.writeHead(200, {
@@ -25,8 +20,6 @@ function jsonResponse(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-<<<<<<< HEAD
-=======
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -118,7 +111,6 @@ async function handlePreviewImages(req, res) {
   jsonResponse(res, 200, { results });
 }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
 const page = String.raw`<!doctype html>
 <html lang="ru">
 <head>
@@ -193,11 +185,7 @@ const page = String.raw`<!doctype html>
 
     .toolbar {
       display: grid;
-<<<<<<< HEAD
-      grid-template-columns: 1.5fr 0.7fr 1fr 0.8fr auto auto auto auto;
-=======
-      grid-template-columns: 1.4fr 0.65fr 0.95fr 0.75fr auto auto auto auto auto auto;
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
+      grid-template-columns: 1.4fr 0.95fr 0.75fr auto auto auto auto auto auto;
       gap: 10px;
       align-items: end;
       margin-bottom: 14px;
@@ -271,6 +259,22 @@ const page = String.raw`<!doctype html>
       margin-bottom: 14px;
     }
 
+    .time-filters {
+      display: none;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid rgba(110, 168, 255, 0.14);
+      border-radius: var(--radius);
+      background: var(--panel-soft);
+      box-shadow: var(--shadow);
+    }
+
+    .time-filters.visible {
+      display: grid;
+    }
+
     .pill {
       display: inline-flex;
       align-items: center;
@@ -342,10 +346,7 @@ const page = String.raw`<!doctype html>
 
     .card {
       display: grid;
-<<<<<<< HEAD
-=======
       grid-template-columns: 180px minmax(0, 1fr);
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       gap: 8px;
       padding: 12px 14px;
       border: 1px solid rgba(110, 168, 255, 0.13);
@@ -355,8 +356,6 @@ const page = String.raw`<!doctype html>
       transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
     }
 
-<<<<<<< HEAD
-=======
     .card-photo {
       width: 100%;
       aspect-ratio: 4 / 3;
@@ -379,7 +378,6 @@ const page = String.raw`<!doctype html>
       object-fit: cover;
     }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     .card:hover {
       transform: translateY(-1px);
       border-color: rgba(139, 188, 255, 0.34);
@@ -558,8 +556,6 @@ const page = String.raw`<!doctype html>
       .hero h1 { font-size: 24px; }
       .toolbar { grid-template-columns: 1fr; }
     }
-<<<<<<< HEAD
-=======
 
     @media (max-width: 620px) {
       .hero { padding: 14px; }
@@ -577,18 +573,13 @@ const page = String.raw`<!doctype html>
     @media (max-width: 430px) {
       .card { grid-template-columns: 1fr; }
     }
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
   </style>
 </head>
 <body>
   <main class="app">
     <section class="hero">
       <h1>Avito Transit</h1>
-<<<<<<< HEAD
-      <p>Загрузи JSON-файл, получи ленту карточек объявлений и отфильтруй их по времени в пути. Карточка показывает название, цену, адрес, описание и ссылку на открытие объявления.</p>
-=======
       <p>Загрузи JSON-файл, получи ленту карточек объявлений и отфильтруй их по времени в пути. Карточка показывает фото, название, цену, адрес, описание и ссылку на открытие объявления.</p>
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       <div style="margin-top:12px;">
         <a class="button" href="/merge" style="display:inline-flex; text-decoration:none;">Объединить JSON</a>
       </div>
@@ -598,10 +589,6 @@ const page = String.raw`<!doctype html>
       <label class="field">
         JSON-файл
         <input id="fileInput" type="file" accept=".json,application/json">
-      </label>
-      <label class="field">
-        До, минут
-        <input id="filterMinutes" type="number" min="1" step="1" value="60">
       </label>
       <label class="field">
         Исключить по названию
@@ -617,13 +604,12 @@ const page = String.raw`<!doctype html>
       <button id="showButton" class="button primary" type="button">Показать карточки</button>
       <button id="filterButton" class="button" type="button" disabled>Фильтровать</button>
       <button id="resetButton" class="button" type="button" disabled>Сбросить</button>
-<<<<<<< HEAD
-=======
       <button id="imageButton" class="button" type="button" disabled>Найти фото</button>
       <button id="downloadUrlsButton" class="download-btn" type="button" disabled>Ссылки</button>
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       <button id="downloadButton" class="download-btn" type="button" disabled>Скачать JSON</button>
     </section>
+
+    <section id="timeFilters" class="time-filters" aria-label="Фильтры по полям времени"></section>
 
     <section class="meta" aria-live="polite">
       <div class="pill">Файл: <strong id="fileName">не выбран</strong></div>
@@ -650,21 +636,22 @@ const page = String.raw`<!doctype html>
 
   <script>
     const preferredTimeKeys = ['Родина', 'работа Оли'];
+    const ignoredTimeKeyNames = new Set([
+      'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
+      'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
+    ]);
 
     const els = {
       fileInput: document.querySelector('#fileInput'),
-      filterMinutes: document.querySelector('#filterMinutes'),
       excludeTitle: document.querySelector('#excludeTitle'),
       sortMode: document.querySelector('#sortMode'),
       showButton: document.querySelector('#showButton'),
       filterButton: document.querySelector('#filterButton'),
       resetButton: document.querySelector('#resetButton'),
-<<<<<<< HEAD
-=======
       imageButton: document.querySelector('#imageButton'),
       downloadUrlsButton: document.querySelector('#downloadUrlsButton'),
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       downloadButton: document.querySelector('#downloadButton'),
+      timeFilters: document.querySelector('#timeFilters'),
       clearLogs: document.querySelector('#clearLogs'),
       feed: document.querySelector('#feed'),
       logBody: document.querySelector('#logBody'),
@@ -680,13 +667,11 @@ const page = String.raw`<!doctype html>
       allItems: [],
       visibleItems: [],
       timeKeys: [],
+      timeLimits: {},
       excludeTerms: [],
       sortMode: 'time',
-<<<<<<< HEAD
-=======
       imageCache: new Map(),
       imageLoading: false,
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       logs: [],
     };
 
@@ -699,8 +684,6 @@ const page = String.raw`<!doctype html>
         .replaceAll("'", '&#39;');
     }
 
-<<<<<<< HEAD
-=======
     function displayText(value) {
       const text = String(value ?? '');
       if (!/[РС][\u0400-\u04ff]/.test(text)) return text;
@@ -749,7 +732,6 @@ const page = String.raw`<!doctype html>
       return extra[code] ?? null;
     }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     function log(message, tone = 'info') {
       const stamp = new Date().toLocaleTimeString('ru-RU', { hour12: false });
       state.logs.push({ stamp, message, tone });
@@ -784,13 +766,8 @@ const page = String.raw`<!doctype html>
       const text = String(value ?? '').toLowerCase().replace(',', '.');
       if (!text || text.includes('ошиб') || text.includes('не найден')) return Number.POSITIVE_INFINITY;
 
-<<<<<<< HEAD
-      const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:ч|час)/);
-      const minuteMatch = text.match(/(\d+)\s*(?:мин|м\b)/);
-=======
       const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:ч|час|С‡|С‡Р°СЃ)/);
       const minuteMatch = text.match(/(\d+)\s*(?:мин|м\b|РјРёРЅ|Рј\b)/);
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       const numberOnly = text.match(/^\s*(\d+)\s*$/);
       const total =
         (hourMatch ? Number(hourMatch[1]) * 60 : 0) +
@@ -805,17 +782,37 @@ const page = String.raw`<!doctype html>
       return Number.isFinite(parseTransitMinutes(value));
     }
 
+    function isCompactTimeValue(value) {
+      if (!isTimeValue(value)) return false;
+      if (typeof value === 'number') return true;
+
+      const text = String(value ?? '').trim();
+      if (!text) return false;
+
+      const words = text.split(/\s+/).filter(Boolean);
+      return text.length <= 32 && words.length <= 6;
+    }
+
+    function canAutoDetectTimeKey(key) {
+      const normalized = String(key ?? '').trim();
+      if (!normalized) return false;
+      if (preferredTimeKeys.includes(normalized)) return true;
+      return !ignoredTimeKeyNames.has(normalized.toLowerCase());
+    }
+
     function detectTimeKeys(items) {
       const keys = new Set(items.flatMap((item) => Object.keys(item)));
       const preferred = preferredTimeKeys.filter((key) => keys.has(key));
-      if (preferred.length) return preferred;
 
-      return [...keys].filter((key) => {
+      const detected = [...keys].filter((key) => {
+        if (!canAutoDetectTimeKey(key)) return false;
         const values = items
           .map((item) => item[key])
           .filter((value) => value !== undefined && value !== null);
-        return values.length > 0 && values.some(isTimeValue);
+        return values.length > 0 && values.some(isCompactTimeValue);
       });
+
+      return [...new Set([...preferred, ...detected])];
     }
 
     function getAddress(item) {
@@ -834,8 +831,6 @@ const page = String.raw`<!doctype html>
       return item.price || item.цена || '';
     }
 
-<<<<<<< HEAD
-=======
     function getImageCandidate(value) {
       if (!value) return '';
       if (typeof value === 'string') return value;
@@ -868,11 +863,6 @@ const page = String.raw`<!doctype html>
       return state.imageCache.get(getLink(item)) || '';
     }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
-    function getPrimaryTimeMinutes(item) {
-      return getBestTimeMinutes(item);
-    }
-
     function parsePrice(value) {
       if (typeof value === 'number' && Number.isFinite(value)) return value;
       const text = String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -889,9 +879,6 @@ const page = String.raw`<!doctype html>
     }
 
     function getLink(item) {
-<<<<<<< HEAD
-      return item.url || '';
-=======
       const value = item.url || item.URL || item.link || item.href || item.avitoUrl || '';
       if (typeof value !== 'string') return '';
       if (value.startsWith('//')) return 'https:' + value;
@@ -901,7 +888,53 @@ const page = String.raw`<!doctype html>
 
     function collectUrls(items) {
       return [...new Set(items.map(getLink).filter(Boolean))];
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
+    }
+
+    function getDefaultTimeLimit() {
+      return 60;
+    }
+
+    function syncTimeLimits() {
+      const next = {};
+      const defaultLimit = getDefaultTimeLimit();
+      for (const key of state.timeKeys) {
+        const current = Number(state.timeLimits[key]);
+        next[key] = Number.isFinite(current) && current > 0 ? current : defaultLimit;
+      }
+      state.timeLimits = next;
+    }
+
+    function renderTimeFilters() {
+      syncTimeLimits();
+      els.timeFilters.classList.toggle('visible', state.timeKeys.length > 0);
+
+      if (!state.timeKeys.length) {
+        els.timeFilters.innerHTML = '';
+        return;
+      }
+
+      els.timeFilters.innerHTML = state.timeKeys.map((key, index) => (
+        '<label class="field">' +
+          esc(displayText(key)) +
+          '<input class="time-limit-input" data-time-index="' + index + '" type="number" min="1" step="1" value="' + esc(state.timeLimits[key]) + '">' +
+        '</label>'
+      )).join('');
+    }
+
+    function readTimeLimitsFromInputs() {
+      els.timeFilters.querySelectorAll('.time-limit-input').forEach((input) => {
+        const key = state.timeKeys[Number(input.dataset.timeIndex)];
+        if (!key) return;
+        state.timeLimits[key] = Number(input.value || 0);
+      });
+    }
+
+    function getInvalidTimeLimits() {
+      readTimeLimitsFromInputs();
+      return state.timeKeys.filter((key) => {
+        const limit = Number(state.timeLimits[key]);
+        return !Number.isFinite(limit) || limit <= 0;
+      });
     }
 
     function getBestTimeMinutes(item) {
@@ -962,17 +995,12 @@ const page = String.raw`<!doctype html>
     function updateActionsState() {
       const hasItems = state.allItems.length > 0;
       const hasVisible = state.visibleItems.length > 0;
-<<<<<<< HEAD
-      els.filterButton.disabled = !hasItems || !state.timeKeys.length;
-      els.resetButton.disabled = !hasItems;
-=======
       const hasUrls = collectUrls(state.visibleItems).length > 0;
       els.filterButton.disabled = !hasItems || !state.timeKeys.length;
       els.resetButton.disabled = !hasItems;
       els.imageButton.disabled = !hasUrls || state.imageLoading;
       els.downloadUrlsButton.disabled = !hasUrls;
       els.downloadUrlsButton.classList.toggle('disabled', !hasUrls);
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       els.downloadButton.disabled = !hasVisible;
       els.downloadButton.classList.toggle('disabled', !hasVisible);
     }
@@ -1003,8 +1031,6 @@ const page = String.raw`<!doctype html>
       log('JSON экспортирован: ' + payload.length + ' объектов.', 'ok');
     }
 
-<<<<<<< HEAD
-=======
     function downloadUrlsFile() {
       const urls = collectUrls(state.visibleItems);
       if (!urls.length) {
@@ -1027,7 +1053,6 @@ const page = String.raw`<!doctype html>
       log('Ссылки экспортированы: ' + urls.length + '.', 'ok');
     }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     function readItemsFromText(text) {
       const parsed = unwrapJson(JSON.parse(text));
       if (!parsed.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
@@ -1036,10 +1061,13 @@ const page = String.raw`<!doctype html>
       return parsed;
     }
 
-    function applyFilter(items, maxMinutes) {
+    function applyFilter(items) {
       let filtered = items;
       if (state.timeKeys.length) {
-        filtered = filtered.filter((item) => state.timeKeys.every((key) => parseTransitMinutes(item[key]) <= maxMinutes));
+        filtered = filtered.filter((item) => state.timeKeys.every((key) => {
+          const limit = Number(state.timeLimits[key]);
+          return parseTransitMinutes(item[key]) <= limit;
+        }));
       }
       filtered = applyExclusions(filtered);
       return filtered;
@@ -1048,11 +1076,7 @@ const page = String.raw`<!doctype html>
     function updateSummary() {
       els.fileName.textContent = state.fileName || 'не выбран';
       els.countInfo.textContent = String(state.visibleItems.length);
-<<<<<<< HEAD
-      els.timeInfo.textContent = state.timeKeys.length ? state.timeKeys.join(', ') : 'нет';
-=======
       els.timeInfo.textContent = state.timeKeys.length ? state.timeKeys.map(displayText).join(', ') : 'нет';
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     }
 
     function renderCards(items) {
@@ -1066,41 +1090,24 @@ const page = String.raw`<!doctype html>
         return;
       }
 
-      const timeKeys = state.timeKeys.slice(0, 2);
+      const timeKeys = state.timeKeys;
       els.feed.className = 'feed';
       els.feed.innerHTML = ordered.map((item) => {
-<<<<<<< HEAD
-        const title = getTitle(item);
-        const price = getPrice(item);
-        const address = getAddress(item);
-        const description = getDescription(item);
-        const link = getLink(item);
-        const primaryTime = getPrimaryTimeMinutes(item);
-=======
         const title = displayText(getTitle(item));
         const price = displayText(getPrice(item));
         const address = displayText(getAddress(item));
         const description = displayText(getDescription(item));
         const link = getLink(item);
         const imageUrl = getImageUrl(item);
-        const primaryTime = getPrimaryTimeMinutes(item);
         const imageMarkup = imageUrl
           ? '<div class="card-photo"><img src="' + esc(imageUrl) + '" alt="' + esc(title) + '" loading="lazy" referrerpolicy="no-referrer"></div>'
           : '<div class="card-photo">Фото пока нет</div>';
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
         const titleMarkup = link
           ? '<a class="title" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">' + esc(title) + '</a>'
           : '<div class="title">' + esc(title) + '</div>';
         const timeMarkup = timeKeys.length
           ? '<div class="time-row">' +
-              (Number.isFinite(primaryTime)
-                ? '<span class="time-pill primary">Время: ' + esc(primaryTime) + ' мин</span>'
-                : '<span class="time-pill primary">Время: нет данных</span>') +
-<<<<<<< HEAD
-              timeKeys.map((key) => '<span class="time-pill">' + esc(key) + ': ' + esc(item[key] ?? '') + '</span>').join('') +
-=======
               timeKeys.map((key) => '<span class="time-pill">' + esc(displayText(key)) + ': ' + esc(displayText(item[key] ?? '')) + '</span>').join('') +
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
             '</div>'
           : '';
         const linkMarkup = link
@@ -1109,10 +1116,7 @@ const page = String.raw`<!doctype html>
 
         return [
           '<article class="card">',
-<<<<<<< HEAD
-=======
             imageMarkup,
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
             '<div class="card-body">',
               timeMarkup,
               titleMarkup,
@@ -1142,23 +1146,18 @@ const page = String.raw`<!doctype html>
       const items = readItemsFromText(rawText);
       state.allItems = items;
       state.timeKeys = detectTimeKeys(items);
+      renderTimeFilters();
       state.sortMode = els.sortMode.value;
       state.visibleItems = items.slice();
       updateSummary();
       renderCards(items);
       updateActionsState();
-<<<<<<< HEAD
-      const timeText = state.timeKeys.length ? 'Найдены поля времени: ' + state.timeKeys.join(', ') : 'Поля времени не найдены';
-=======
       const timeText = state.timeKeys.length ? 'Найдены поля времени: ' + state.timeKeys.map(displayText).join(', ') : 'Поля времени не найдены';
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       setStatus('Загружено объектов: ' + items.length + '. ' + timeText, state.timeKeys.length ? 'ok' : 'warn');
       log('JSON распарсен: ' + items.length + ' объектов.', 'ok');
       log(timeText + '.', state.timeKeys.length ? 'ok' : 'warn');
     }
 
-<<<<<<< HEAD
-=======
     async function loadPreviewImages(options = {}) {
       const urls = collectUrls(state.visibleItems);
       if (!urls.length) {
@@ -1210,7 +1209,6 @@ const page = String.raw`<!doctype html>
       }
     }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     async function loadFile(file) {
       state.fileName = file.name;
       els.fileName.textContent = file.name;
@@ -1254,46 +1252,50 @@ const page = String.raw`<!doctype html>
       }
     }
 
-<<<<<<< HEAD
-    function handleFilter() {
-=======
     function handleFilter(options = {}) {
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
-      const maxMinutes = Number(els.filterMinutes.value || 0);
       state.excludeTerms = parseTerms(els.excludeTitle.value);
-      if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) {
-        setStatus('Укажи лимит времени больше 0 минут.', 'bad');
-        log('Фильтр не применён: неверный лимит "' + els.filterMinutes.value + '".', 'warn');
-        return;
-      }
-
       if (!state.allItems.length) {
         setStatus('Сначала загрузи JSON.', 'warn');
         log('Фильтр не применён: данных ещё нет.', 'warn');
         return;
       }
 
-      const filtered = applyFilter(state.allItems, maxMinutes);
+      if (!state.timeKeys.length) {
+        setStatus('Поля времени не найдены.', 'warn');
+        log('Фильтр не применён: поля времени не найдены.', 'warn');
+        return;
+      }
+
+      const invalidTimeKeys = getInvalidTimeLimits();
+      if (invalidTimeKeys.length) {
+        const names = invalidTimeKeys.map(displayText).join(', ');
+        setStatus('Проверь лимиты времени для полей: ' + names, 'bad');
+        log('Фильтр не применён: неверные лимиты для полей ' + names + '.', 'warn');
+        return;
+      }
+
+      const filtered = applyFilter(state.allItems);
       state.visibleItems = filtered;
       state.sortMode = els.sortMode.value;
       renderCards(filtered);
       updateSummary();
       updateActionsState();
       const excludedText = state.excludeTerms.length ? ' исключения: ' + state.excludeTerms.join(', ') : '';
-      setStatus('Фильтр до ' + maxMinutes + ' мин' + excludedText + ': ' + filtered.length + ' из ' + state.allItems.length, 'ok');
-      log('Фильтр применён: до ' + maxMinutes + ' мин' + excludedText + ', осталось ' + filtered.length + ' из ' + state.allItems.length, 'ok');
-<<<<<<< HEAD
-=======
+      const limitText = state.timeKeys
+        .map((key) => displayText(key) + ' до ' + state.timeLimits[key] + ' мин')
+        .join(', ');
+      setStatus('Фильтр: ' + limitText + excludedText + ': ' + filtered.length + ' из ' + state.allItems.length, 'ok');
+      log('Фильтр применён: ' + limitText + excludedText + ', осталось ' + filtered.length + ' из ' + state.allItems.length, 'ok');
       if (options.fetchImages) {
         void loadPreviewImages({ silent: true });
       }
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     }
 
     function handleReset() {
       if (!state.allItems.length) return;
       state.visibleItems = state.allItems.slice();
       state.sortMode = els.sortMode.value;
+      renderTimeFilters();
       renderCards(state.visibleItems);
       updateSummary();
       updateActionsState();
@@ -1309,15 +1311,10 @@ const page = String.raw`<!doctype html>
 
     els.fileInput.addEventListener('change', handleFileInput);
     els.showButton.addEventListener('click', handleShow);
-<<<<<<< HEAD
-    els.filterButton.addEventListener('click', handleFilter);
-    els.resetButton.addEventListener('click', handleReset);
-=======
     els.filterButton.addEventListener('click', () => handleFilter({ fetchImages: true }));
     els.resetButton.addEventListener('click', handleReset);
     els.imageButton.addEventListener('click', () => loadPreviewImages());
     els.downloadUrlsButton.addEventListener('click', downloadUrlsFile);
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     els.downloadButton.addEventListener('click', downloadJsonFile);
     els.clearLogs.addEventListener('click', clearLogs);
     els.sortMode.addEventListener('change', () => {
@@ -1332,7 +1329,9 @@ const page = String.raw`<!doctype html>
     els.excludeTitle.addEventListener('keyup', (event) => {
       if (event.key === 'Enter' && state.allItems.length) handleFilter();
     });
-    els.filterMinutes.addEventListener('input', () => {
+    els.timeFilters.addEventListener('input', (event) => {
+      if (!event.target.classList.contains('time-limit-input')) return;
+      readTimeLimitsFromInputs();
       if (state.allItems.length) handleFilter();
     });
 
@@ -1671,11 +1670,7 @@ const mergePage = String.raw`<!doctype html>
 </html>`;
 
 function createServer() {
-<<<<<<< HEAD
-  return http.createServer((req, res) => {
-=======
   return http.createServer(async (req, res) => {
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -1689,14 +1684,11 @@ function createServer() {
         return;
       }
 
-<<<<<<< HEAD
-=======
       if (req.method === 'POST' && url.pathname === '/api/preview-images') {
         await handlePreviewImages(req, res);
         return;
       }
 
->>>>>>> c5bb7fe (добавил сайт где можно смотреть объявления)
       jsonResponse(res, 404, { error: 'Not found' });
     } catch (error) {
       jsonResponse(res, 500, { error: error?.message || String(error) });
