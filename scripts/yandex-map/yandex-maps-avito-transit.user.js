@@ -4,8 +4,10 @@
 // @version      1.1.1
 // @description  По очереди строит маршруты в Яндекс.Картах и добавляет время до "Родина" и "работа Оли" в JSON-объекты Avito.
 // @match        *://yandex.kz/maps/*
+// @match        *://yandex.ru/maps/*
 // @match        *://yandex.com/maps/*
 // @match        *://*.yandex.kz/maps/*
+// @match        *://*.yandex.ru/maps/*
 // @match        *://*.yandex.com/maps/*
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -415,7 +417,7 @@
           apiRequest('POST', `/api/jobs/${encodeURIComponent(nextState.remoteJob.jobId)}/fail`, {
             workerId: getWorkerId(),
             error: nextState.lastError,
-          }).catch(() => {});
+          }).catch(() => { });
         }
         render();
       });
@@ -626,7 +628,7 @@
       const nextState = readState();
       nextState.lastError = error?.message || String(error);
       writeState(nextState);
-      heartbeat('ready').catch(() => {});
+      heartbeat('ready').catch(() => { });
       scheduleWorkerPoll(WORKER_POLL_MS);
     }
   }
@@ -998,11 +1000,11 @@
     const bodyDuration = extractDurationFromText(bodyText);
     return bodyDuration
       ? {
-          value: bodyDuration,
-          method: 'body text fallback',
-          selector: 'document.body.innerText',
-          text: bodyText.slice(0, 180),
-        }
+        value: bodyDuration,
+        method: 'body text fallback',
+        selector: 'document.body.innerText',
+        text: bodyText.slice(0, 180),
+      }
       : null;
   }
 
