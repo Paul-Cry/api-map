@@ -1,8 +1,11 @@
 ﻿import http from 'node:http';
+import { readFile, writeFile } from 'node:fs/promises';
 
 const PORT = Number(globalThis.process?.env?.PORT || 4173);
 const MAX_PORT_ATTEMPTS = 10;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const ANALYTICS_DATA_FILE = new URL('./analytics-data.json', import.meta.url);
+const ADMIN_KEY = String(globalThis.process?.env?.ANALYTICS_ADMIN_KEY || globalThis.process?.env?.ADMIN_KEY || '');
 
 function htmlResponse(res, html) {
   res.writeHead(200, {
@@ -109,6 +112,75 @@ async function handlePreviewImages(req, res) {
   }));
 
   jsonResponse(res, 200, { results });
+}
+
+function unwrapItems(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.result)) return value.result;
+  if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.data)) return value.data;
+  throw new Error('JSON должен быть массивом или объектом с result/items/data.');
+}
+
+function getAdminKey(req) {
+  return String(req.headers['x-admin-key'] || '').trim();
+}
+
+function ensureAdmin(req) {
+  if (!ADMIN_KEY) {
+    const error = new Error('На сервере не задан ANALYTICS_ADMIN_KEY. Сохранение отключено.');
+    error.status = 403;
+    throw error;
+  }
+
+  if (getAdminKey(req) !== ADMIN_KEY) {
+    const error = new Error('Неверный ключ панели управления.');
+    error.status = 401;
+    throw error;
+  }
+}
+
+async function readSavedAnalyticsData() {
+  try {
+    const text = await readFile(ANALYTICS_DATA_FILE, 'utf8');
+    const payload = JSON.parse(text);
+    const items = unwrapItems(payload);
+    return {
+      items,
+      updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
+    };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { items: [], updatedAt: null };
+    throw error;
+  }
+}
+
+async function handleGetAnalyticsData(req, res) {
+  const saved = await readSavedAnalyticsData();
+  jsonResponse(res, 200, {
+    items: saved.items,
+    count: saved.items.length,
+    updatedAt: saved.updatedAt,
+  });
+}
+
+async function handleSaveAnalyticsData(req, res) {
+  ensureAdmin(req);
+  const body = await readBody(req);
+  const payload = JSON.parse(body || '{}');
+  const items = unwrapItems(payload);
+  const saved = {
+    updatedAt: new Date().toISOString(),
+    count: items.length,
+    items,
+  };
+
+  await writeFile(ANALYTICS_DATA_FILE, JSON.stringify(saved, null, 2), 'utf8');
+  jsonResponse(res, 200, {
+    ok: true,
+    count: items.length,
+    updatedAt: saved.updatedAt,
+  });
 }
 
 const page = String.raw`<!doctype html>
@@ -582,6 +654,8 @@ const page = String.raw`<!doctype html>
       <p>Загрузи JSON-файл, получи ленту карточек объявлений и отфильтруй их по времени в пути. Карточка показывает фото, название, цену, адрес, описание и ссылку на открытие объявления.</p>
       <div style="margin-top:12px;">
         <a class="button" href="/merge" style="display:inline-flex; text-decoration:none;">Объединить JSON</a>
+        <a class="button" href="/costs" style="display:inline-flex; text-decoration:none; margin-left:8px;">Расходы за 3 месяца</a>
+        <a class="button" href="/analytics" style="display:inline-flex; text-decoration:none; margin-left:8px;">Аналитика</a>
       </div>
     </section>
 
@@ -1342,6 +1416,1512 @@ const page = String.raw`<!doctype html>
 </body>
 </html>`;
 
+const analyticsPage = String.raw`<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Аналитика аренды</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080a10;
+      --panel: rgba(18, 21, 30, 0.94);
+      --panel-strong: #171b26;
+      --text: #f3f6fb;
+      --muted: #a9b1c0;
+      --line: #2a3140;
+      --accent: #7cc7a8;
+      --accent-2: #f1bd6b;
+      --accent-3: #89a7ff;
+      --bad: #ff8585;
+      --warn: #ffd36e;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 0%, rgba(124, 199, 168, 0.18), transparent 28%),
+        radial-gradient(circle at 82% 8%, rgba(241, 189, 107, 0.12), transparent 24%),
+        linear-gradient(180deg, #080a10 0%, #111520 100%);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    .app { width: min(1380px, calc(100vw - 24px)); margin: 0 auto; padding: 18px 0 26px; }
+    .hero, .panel, .toolbar, .metric, .insight {
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .hero { padding: 18px 20px; margin-bottom: 14px; background: linear-gradient(180deg, rgba(26,31,43,0.96), rgba(16,20,29,0.96)); }
+    .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.05; }
+    p { margin: 8px 0 0; max-width: 980px; color: var(--muted); line-height: 1.5; }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    .link-btn, .action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 40px; padding: 0 13px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1); background: #202637;
+      color: var(--text); text-decoration: none; font-weight: 800; white-space: nowrap; cursor: pointer;
+    }
+    .action-btn.primary { background: var(--accent); color: #07120e; border-color: var(--accent); }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .toolbar { display: grid; grid-template-columns: 1fr 1fr 170px 170px auto; gap: 12px; align-items: end; padding: 14px; margin-bottom: 14px; }
+    .field { display: grid; gap: 6px; color: #d8dfeb; font-size: 13px; font-weight: 750; }
+    input, select, textarea {
+      width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+      background: #101520; color: var(--text); outline: none;
+    }
+    input, select { min-height: 40px; padding: 0 11px; }
+    input[type="file"] { padding: 8px 10px; color: var(--muted); }
+    textarea { min-height: 150px; padding: 12px; resize: vertical; font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,199,168,0.15); }
+    .json-box { margin-bottom: 14px; }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .metric { min-height: 96px; padding: 13px; display: grid; align-content: space-between; }
+    .metric span { color: var(--muted); font-size: 12px; font-weight: 750; }
+    .metric strong { font-size: 22px; line-height: 1; letter-spacing: 0; }
+    .metric em { color: var(--accent-2); font-style: normal; font-size: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+    .panel { overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--panel-strong); border-bottom: 1px solid var(--line); }
+    .panel-title { font-size: 15px; font-weight: 900; }
+    .status { color: var(--muted); font-size: 13px; }
+    .panel-body { padding: 12px; }
+    .insights { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .insight { padding: 13px; min-height: 130px; }
+    .insight b { display: block; margin-bottom: 8px; font-size: 13px; }
+    .insight div { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 9px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: #dce5f2; background: rgba(255,255,255,0.03); font-size: 12px; }
+    .money { color: var(--accent-2); font-weight: 900; white-space: nowrap; }
+    .time { color: var(--accent); font-weight: 900; white-space: nowrap; }
+    .muted { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .title { color: var(--text); text-decoration: none; font-weight: 800; }
+    .title:hover { color: var(--accent); text-decoration: underline; }
+    .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; background: rgba(137,167,255,0.14); color: #dfe6ff; font-size: 12px; font-weight: 800; }
+    .top-row td { background: rgba(124, 199, 168, 0.045); }
+    .top-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      margin: 0 7px 5px 0;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: rgba(124, 199, 168, 0.16);
+      color: #c8ffe9;
+      font-size: 11px;
+      font-weight: 900;
+      vertical-align: middle;
+    }
+    .table-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .small-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 0 11px;
+      border: 1px solid rgba(124, 199, 168, 0.24);
+      border-radius: 10px;
+      background: rgba(124, 199, 168, 0.11);
+      color: #dfffee;
+      font-weight: 850;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .small-btn:hover { border-color: rgba(124, 199, 168, 0.48); background: rgba(124, 199, 168, 0.16); }
+    .full-view.hidden, .analytics-section.hidden { display: none; }
+    .empty { min-height: 170px; display: grid; place-items: center; color: var(--muted); text-align: center; }
+    .method { display: grid; gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .method strong { color: var(--text); }
+    @media (max-width: 1120px) {
+      .toolbar, .grid { grid-template-columns: 1fr; }
+      .metrics, .insights { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      .app { width: min(100vw - 16px, 760px); padding-top: 10px; }
+      h1 { font-size: 24px; }
+      .metrics, .insights { grid-template-columns: 1fr; }
+      .panel-body { overflow-x: auto; }
+      table { min-width: 720px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Аналитика аренды</h1>
+          <p>Загрузи JSON с объявлениями и получи разбор рынка: средняя и медианная цена, дешёвые и дорогие варианты, полная стоимость въезда, время до Оли, время до Никиты и сбалансированные варианты.</p>
+        </div>
+        <nav class="nav">
+          <a class="link-btn" href="/">Фильтр</a>
+          <a class="link-btn" href="/costs">Расходы</a>
+          <a class="link-btn" href="/merge">Объединить JSON</a>
+          <a class="link-btn" href="/analytics-admin">Панель</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
+      <label class="field">Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
+      <label class="field">Поле Оли <select id="olyaKey"></select></label>
+      <label class="field">Поле Никиты <select id="nikitaKey"></select></label>
+      <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
+    </section>
+
+    <section class="panel json-box">
+      <div class="panel-head">
+        <div class="panel-title">JSON вручную</div>
+        <div id="status" class="status">Можно загрузить файл или вставить массив объектов сюда</div>
+      </div>
+      <div class="panel-body">
+        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"Родина":"1 ч 43 мин","работа Оли":"2 ч 17 мин"}]'></textarea>
+      </div>
+    </section>
+
+    <section class="metrics" id="metrics"></section>
+    <section class="insights" id="insights"></section>
+
+    <section class="panel full-view hidden" id="fullView">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title" id="fullTitle">Все варианты</div>
+          <div class="status" id="fullStatus"></div>
+        </div>
+        <button class="small-btn" id="backToAnalytics" type="button">Назад к аналитике</button>
+      </div>
+      <div class="panel-body" id="fullTable"></div>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Самые дешёвые</div><div class="status">по аренде в месяц</div></div>
+        <div class="panel-body" id="cheapTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Самые дорогие</div><div class="status">по аренде в месяц</div></div>
+        <div class="panel-body" id="expensiveTable"></div>
+      </section>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Быстрее всего до Оли</div><div id="olyaAvg" class="status"></div></div>
+        <div class="panel-body" id="olyaTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Быстрее всего до Никиты</div><div id="nikitaAvg" class="status"></div></div>
+        <div class="panel-body" id="nikitaTable"></div>
+      </section>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Золотая середина</div><div id="balancedAvg" class="status"></div></div>
+        <div class="panel-body" id="balancedTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Градация по времени</div><div class="status">средняя стоимость в группах</div></div>
+        <div class="panel-body" id="bucketsTable"></div>
+      </section>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Оценка 0-100</div><div id="scoreAvg" class="status"></div></div>
+        <div class="panel-body" id="scoreTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Минимальная цена за м²</div><div id="valueAvg" class="status"></div></div>
+        <div class="panel-body" id="valueTable"></div>
+      </section>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Самый дешёвый вход</div><div id="startAvg" class="status"></div></div>
+        <div class="panel-body" id="startTable"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Минимум ₽ за минуту пути</div><div id="minuteAvg" class="status"></div></div>
+        <div class="panel-body" id="minuteTable"></div>
+      </section>
+    </section>
+
+    <section class="grid analytics-section">
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title">Типы баланса и входа</div><div class="status">сводка категорий</div></div>
+        <div class="panel-body" id="categoryTable"></div>
+      </section>
+    </section>
+
+    <section class="panel analytics-section">
+      <div class="panel-head"><div class="panel-title">Что учитывается в анализе</div><div class="status">методика</div></div>
+      <div class="panel-body method">
+        <div><strong>Медиана</strong> показывает типичную цену устойчивее среднего, потому что дорогие выбросы сильно тянут среднее вверх.</div>
+        <div><strong>Полная стоимость</strong> важна рядом с месячной арендой: залог и комиссия могут сделать дешёвый объект дорогим на входе.</div>
+        <div><strong>Цена за м²</strong> помогает сравнивать разные площади, а время до двух адресов показывает реальную бытовую стоимость локации.</div>
+        <div><strong>Дополнительные рейтинги</strong> строятся только по числам: цена за м², стартовый платёж, среднее время и разница между маршрутами.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      fileInput: document.querySelector('#fileInput'),
+      jsonInput: document.querySelector('#jsonInput'),
+      analyzeBtn: document.querySelector('#analyzeBtn'),
+      fastLimit: document.querySelector('#fastLimit'),
+      olyaKey: document.querySelector('#olyaKey'),
+      nikitaKey: document.querySelector('#nikitaKey'),
+      status: document.querySelector('#status'),
+      metrics: document.querySelector('#metrics'),
+      insights: document.querySelector('#insights'),
+      cheapTable: document.querySelector('#cheapTable'),
+      expensiveTable: document.querySelector('#expensiveTable'),
+      olyaTable: document.querySelector('#olyaTable'),
+      nikitaTable: document.querySelector('#nikitaTable'),
+      balancedTable: document.querySelector('#balancedTable'),
+      bucketsTable: document.querySelector('#bucketsTable'),
+      scoreTable: document.querySelector('#scoreTable'),
+      valueTable: document.querySelector('#valueTable'),
+      startTable: document.querySelector('#startTable'),
+      minuteTable: document.querySelector('#minuteTable'),
+      categoryTable: document.querySelector('#categoryTable'),
+      olyaAvg: document.querySelector('#olyaAvg'),
+      nikitaAvg: document.querySelector('#nikitaAvg'),
+      balancedAvg: document.querySelector('#balancedAvg'),
+      scoreAvg: document.querySelector('#scoreAvg'),
+      valueAvg: document.querySelector('#valueAvg'),
+      startAvg: document.querySelector('#startAvg'),
+      minuteAvg: document.querySelector('#minuteAvg'),
+      fullView: document.querySelector('#fullView'),
+      fullTitle: document.querySelector('#fullTitle'),
+      fullStatus: document.querySelector('#fullStatus'),
+      fullTable: document.querySelector('#fullTable'),
+      backToAnalytics: document.querySelector('#backToAnalytics'),
+    };
+
+    const PREVIEW_LIMIT = 15;
+
+    const tableTitles = {
+      cheap: 'Все самые дешёвые варианты',
+      expensive: 'Все самые дорогие варианты',
+      olya: 'Все варианты по времени до Оли',
+      nikita: 'Все варианты по времени до Никиты',
+      balanced: 'Все варианты золотой середины',
+      score: 'Все варианты по среднему времени',
+      value: 'Все варианты по цене за м²',
+      start: 'Все варианты по стоимости заселения',
+      minute: 'Все варианты по ₽ за минуту пути',
+    };
+
+    const state = { items: [], rows: [], timeKeys: [], tableRows: {}, tableColumns: {}, tableHighlights: {} };
+
+    function esc(value) {
+      return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    function rub(value) {
+      const number = Number(value || 0);
+      return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(number)) + ' ₽';
+    }
+
+    function minutesText(value) {
+      if (!Number.isFinite(value)) return 'нет';
+      const hours = Math.floor(value / 60);
+      const minutes = value % 60;
+      return (hours ? hours + ' ч ' : '') + minutes + ' мин';
+    }
+
+    function unwrapJson(value) {
+      if (Array.isArray(value)) return value;
+      if (Array.isArray(value?.result)) return value.result;
+      if (Array.isArray(value?.items)) return value.items;
+      if (Array.isArray(value?.data)) return value.data;
+      throw new Error('JSON должен быть массивом или объектом с result/items/data.');
+    }
+
+    function parseMoney(value) {
+      if (typeof value === 'number') return value;
+      const text = String(value ?? '').replace(/\s+/g, ' ');
+      const match = text.match(/(\d[\d\s.,]*)/);
+      if (!match) return 0;
+      return Number(match[1].replace(/[^\d]/g, '')) || 0;
+    }
+
+    function parseArea(item) {
+      const text = [item?.title, item?.name, item?.description].filter(Boolean).join(' ');
+      const match = text.match(/(\d+(?:[,.]\d+)?)\s*м[²2]/i);
+      return match ? Number(match[1].replace(',', '.')) : 0;
+    }
+
+    function parseRooms(item) {
+      const text = [item?.title, item?.name].filter(Boolean).join(' ').toLowerCase();
+      const studio = /студ/.test(text);
+      if (studio) return 0;
+      const match = text.match(/(\d+)\s*[- ]?\s*(?:к|комн)/i);
+      return match ? Number(match[1]) : null;
+    }
+
+    function parseFloorInfo(item) {
+      const text = [item?.title, item?.name].filter(Boolean).join(' ');
+      const match = text.match(/(\d+)\s*\/\s*(\d+)\s*(?:эт|этаж)/i);
+      if (!match) return { floor: null, totalFloors: null, category: 'этаж не найден' };
+      const floor = Number(match[1]);
+      const totalFloors = Number(match[2]);
+      let category = 'средний этаж';
+      if (floor === totalFloors) category = 'последний этаж';
+      else if (floor <= 3) category = 'низкий этаж';
+      else if (totalFloors && floor / totalFloors >= 0.7) category = 'высокий этаж';
+      return { floor, totalFloors, category };
+    }
+
+    function areaCategory(area) {
+      if (!area) return 'площадь не найдена';
+      if (area < 35) return 'маленькая';
+      if (area < 45) return 'нормальная';
+      if (area < 60) return 'просторная';
+      return 'большая';
+    }
+
+    function parseTime(value) {
+      if (typeof value === 'number') return value;
+      const text = String(value ?? '').toLowerCase();
+      if (!text.trim()) return Infinity;
+      let total = 0;
+      const day = text.match(/(\d+)\s*(?:д|дн|день|дня)/);
+      const hour = text.match(/(\d+)\s*(?:ч|час|часа|часов|h)/);
+      const min = text.match(/(\d+)\s*(?:м|мин|minute|min)/);
+      if (day) total += Number(day[1]) * 1440;
+      if (hour) total += Number(hour[1]) * 60;
+      if (min) total += Number(min[1]);
+      if (!total) {
+        const onlyNumber = text.match(/^\s*(\d+)\s*$/);
+        if (onlyNumber) total = Number(onlyNumber[1]);
+      }
+      return total || Infinity;
+    }
+
+    function getTitle(item) {
+      return String(item?.title ?? item?.name ?? item?.название ?? 'Без названия');
+    }
+
+    function getAddress(item) {
+      return String(item?.adress ?? item?.address ?? item?.адрес ?? '');
+    }
+
+    function getUrl(item) {
+      return String(item?.url ?? item?.link ?? item?.href ?? '');
+    }
+
+    function getRent(item) {
+      return Number(item?.rent_per_month) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
+    }
+
+    function getMonths(item) {
+      const months = Number(item?.months);
+      return Number.isFinite(months) && months > 0 ? months : 3;
+    }
+
+    function getTotal(item, rent, months) {
+      const total = Number(item?.total_for_period);
+      if (Number.isFinite(total) && total > 0) return total;
+
+      const partsTotal = Number(item?.rent_for_period || 0) + Number(item?.commission || 0) + Number(item?.deposit || 0);
+      if (Number.isFinite(partsTotal) && partsTotal > 0) return partsTotal;
+
+      return rent * months;
+    }
+
+    function getCommission(item) {
+      const commission = Number(item?.commission);
+      if (Number.isFinite(commission) && commission >= 0) return commission;
+      const percent = Number(item?.commission_percent);
+      const rent = getRent(item);
+      if (Number.isFinite(percent) && percent > 0 && rent > 0) return rent * percent / 100;
+      return 0;
+    }
+
+    function getDeposit(item) {
+      const deposit = Number(item?.deposit);
+      return Number.isFinite(deposit) && deposit > 0 ? deposit : 0;
+    }
+
+    function moveInCategory(startPayment, rent) {
+      if (!rent) return 'нет данных';
+      if (startPayment <= rent * 1.5) return 'дешёвый вход';
+      if (startPayment <= rent * 2.5) return 'средний вход';
+      return 'дорогой вход';
+    }
+
+    function balanceType(olya, nikita) {
+      if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
+      const diff = Math.abs(olya - nikita);
+      if (diff === 0) return 'одинаково';
+      const side = olya < nikita ? 'Оле быстрее' : 'Никите быстрее';
+      if (diff <= 15) return 'почти одинаково, ' + side;
+      if (diff <= 30) return 'разница 16-30 мин, ' + side;
+      if (diff <= 60) return 'разница 31-60 мин, ' + side;
+      return 'разница больше 60 мин, ' + side;
+    }
+
+    function getPeriodLabel(rows) {
+      const months = [...new Set(rows.map((row) => row.months).filter(Boolean))];
+      if (months.length === 1) return 'за ' + months[0] + ' мес.';
+      return 'за период';
+    }
+
+    function detectTimeKeys(items) {
+      const ignored = new Set([
+        'title', 'name', 'название', 'adress', 'address', 'адрес', 'price', 'цена',
+        'url', 'link', 'href', 'description', 'dop', 'image', 'months',
+        'rent_per_month', 'rent_for_period', 'commission_percent', 'commission',
+        'deposit', 'total_for_period',
+      ]);
+      const keys = [];
+      items.slice(0, 80).forEach((item) => {
+        Object.keys(item || {}).forEach((key) => {
+          const lower = key.toLowerCase();
+          if (ignored.has(lower) || keys.includes(key)) return;
+          const value = item[key];
+          const text = String(value ?? '').toLowerCase();
+          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родина|оли|никит|time|route/.test(lower);
+          const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
+          if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) keys.push(key);
+        });
+      });
+      return keys.sort((a, b) => {
+        const score = (key) => /оли|ol/i.test(key) ? -2 : /родина|никит|nik/i.test(key) ? -1 : 0;
+        return score(a) - score(b) || a.localeCompare(b, 'ru');
+      });
+    }
+
+    function average(values) {
+      const good = values.filter((value) => Number.isFinite(value));
+      return good.length ? good.reduce((sum, value) => sum + value, 0) / good.length : 0;
+    }
+
+    function median(values) {
+      const good = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+      if (!good.length) return 0;
+      const mid = Math.floor(good.length / 2);
+      return good.length % 2 ? good[mid] : (good[mid - 1] + good[mid]) / 2;
+    }
+
+    function percentile(values, ratio) {
+      const good = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+      if (!good.length) return 0;
+      return good[Math.min(good.length - 1, Math.floor((good.length - 1) * ratio))];
+    }
+
+    function scoreLower(value, best, worst) {
+      if (!Number.isFinite(value)) return null;
+      if (!Number.isFinite(best) || !Number.isFinite(worst) || best === worst) return 100;
+      return Math.round(Math.max(0, Math.min(100, 100 - ((value - best) / (worst - best)) * 100)));
+    }
+
+    function scoreHigher(value, best, worst) {
+      if (!Number.isFinite(value) || !value) return null;
+      if (!Number.isFinite(best) || !Number.isFinite(worst) || best === worst) return 100;
+      return Math.round(Math.max(0, Math.min(100, ((value - best) / (worst - best)) * 100)));
+    }
+
+    function avgScore(values) {
+      const good = values.filter((value) => Number.isFinite(value));
+      return good.length ? Math.round(good.reduce((sum, value) => sum + value, 0) / good.length) : 0;
+    }
+
+    function gradeLabel(score) {
+      if (score >= 85) return 'отлично';
+      if (score >= 70) return 'хорошо';
+      if (score >= 50) return 'нормально';
+      if (score >= 30) return 'слабо';
+      return 'плохо';
+    }
+
+    function prepareRows() {
+      const olyaKey = els.olyaKey.value;
+      const nikitaKey = els.nikitaKey.value;
+      const baseRows = state.items.map((item, index) => {
+        const rent = getRent(item);
+        const months = getMonths(item);
+        const total = getTotal(item, rent, months);
+        const area = parseArea(item);
+        const rooms = parseRooms(item);
+        const floorInfo = parseFloorInfo(item);
+        const olya = parseTime(item[olyaKey]);
+        const nikita = parseTime(item[nikitaKey]);
+        const avgCommute = Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity;
+        const maxCommute = Math.max(olya, nikita);
+        const diffTime = Math.abs(olya - nikita);
+        const commission = getCommission(item);
+        const deposit = getDeposit(item);
+        const startPayment = rent + commission + deposit;
+        const priceM2 = area ? rent / area : 0;
+        const dailyRent = rent / 30;
+        const rubPerCommuteMin = Number.isFinite(avgCommute) && avgCommute > 0 ? rent / avgCommute : 0;
+        return {
+          index, item, title: getTitle(item), address: getAddress(item), url: getUrl(item),
+          rent, total, months, area, rooms, floor: floorInfo.floor, totalFloors: floorInfo.totalFloors,
+          floorCategory: floorInfo.category, areaCategory: areaCategory(area),
+          commission, deposit, startPayment, overpaymentPercent: rent ? startPayment / rent * 100 : 0,
+          moveInCostCategory: moveInCategory(startPayment, rent),
+          priceM2, dailyRent, rubPerCommuteMin, olya, nikita, avgCommute, maxCommute, diffTime,
+          balanceType: balanceType(olya, nikita),
+        };
+      }).filter((row) => row.rent > 0);
+      const ranges = {
+        rentMin: Math.min(...baseRows.map((row) => row.rent)),
+        rentMax: Math.max(...baseRows.map((row) => row.rent)),
+        priceM2Min: Math.min(...baseRows.map((row) => row.priceM2).filter(Boolean)),
+        priceM2Max: Math.max(...baseRows.map((row) => row.priceM2).filter(Boolean)),
+        avgMin: Math.min(...baseRows.map((row) => row.avgCommute).filter(Number.isFinite)),
+        avgMax: Math.max(...baseRows.map((row) => row.avgCommute).filter(Number.isFinite)),
+        diffMin: Math.min(...baseRows.map((row) => row.diffTime).filter(Number.isFinite)),
+        diffMax: Math.max(...baseRows.map((row) => row.diffTime).filter(Number.isFinite)),
+        areaMin: Math.min(...baseRows.map((row) => row.area).filter(Boolean)),
+        areaMax: Math.max(...baseRows.map((row) => row.area).filter(Boolean)),
+        startMin: Math.min(...baseRows.map((row) => row.startPayment).filter(Number.isFinite)),
+        startMax: Math.max(...baseRows.map((row) => row.startPayment).filter(Number.isFinite)),
+      };
+
+      state.rows = baseRows.map((row) => {
+        const rentScore = scoreLower(row.rent, ranges.rentMin, ranges.rentMax);
+        const priceM2Score = row.priceM2 ? scoreLower(row.priceM2, ranges.priceM2Min, ranges.priceM2Max) : null;
+        const commuteScore = scoreLower(row.avgCommute, ranges.avgMin, ranges.avgMax);
+        const balanceScore = scoreLower(row.diffTime, ranges.diffMin, ranges.diffMax);
+        const areaScore = row.area ? scoreHigher(row.area, ranges.areaMin, ranges.areaMax) : null;
+        const startPaymentScore = scoreLower(row.startPayment, ranges.startMin, ranges.startMax);
+        const finalScore = avgScore([rentScore, priceM2Score, commuteScore, balanceScore, areaScore, startPaymentScore]);
+
+        return {
+          ...row,
+          rentScore,
+          priceM2Score,
+          commuteScore,
+          balanceScore,
+          areaScore,
+          startPaymentScore,
+          finalScore,
+          grade: gradeLabel(finalScore),
+        };
+      });
+    }
+
+    function setStatus(text, tone) {
+      els.status.textContent = text;
+      els.status.style.color = tone === 'ok' ? 'var(--accent)' : tone === 'warn' ? 'var(--warn)' : 'var(--muted)';
+    }
+
+    function fillTimeSelects() {
+      const options = state.timeKeys.map((key) => '<option value="' + esc(key) + '">' + esc(key) + '</option>').join('');
+      els.olyaKey.innerHTML = options;
+      els.nikitaKey.innerHTML = options;
+      const olya = state.timeKeys.find((key) => /оли|ol/i.test(key)) || state.timeKeys[1] || state.timeKeys[0] || '';
+      const nikita = state.timeKeys.find((key) => /родина|никит|nik/i.test(key)) || state.timeKeys[0] || olya;
+      els.olyaKey.value = olya;
+      els.nikitaKey.value = nikita;
+    }
+
+    function renderMetrics() {
+      const rents = state.rows.map((row) => row.rent);
+      const totals = state.rows.map((row) => row.total);
+      const m2 = state.rows.map((row) => row.priceM2).filter(Boolean);
+      const startPayments = state.rows.map((row) => row.startPayment);
+      const olyaTimes = state.rows.map((row) => row.olya);
+      const nikitaTimes = state.rows.map((row) => row.nikita);
+      const avgTimes = state.rows.map((row) => row.avgCommute);
+      const diffTimes = state.rows.map((row) => row.diffTime);
+      const rubPerMinute = state.rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
+      const fastLimit = Number(els.fastLimit.value || 90);
+      const fastBoth = state.rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
+      const periodLabel = getPeriodLabel(state.rows);
+      const values = [
+        ['Объектов', state.rows.length, 'с распознанной ценой'],
+        ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
+        ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
+        ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
+        ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
+        ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
+        ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
+        ['Среднее до Оли', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
+        ['Среднее до Никиты', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
+        ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
+        ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
+        ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
+        ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
+        ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+        ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
+        ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
+      ];
+      els.metrics.innerHTML = values.map((item) => '<article class="metric"><span>' + esc(item[0]) + '</span><strong>' + esc(item[1]) + '</strong><em>' + esc(item[2]) + '</em></article>').join('');
+    }
+
+    function renderInsights() {
+      const rows = state.rows;
+      const cheapest = rows.slice().sort((a, b) => a.rent - b.rent)[0];
+      const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
+      const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
+      const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
+      const blocks = [
+        ['Самый дешёвый', cheapest ? rub(cheapest.rent) + '<br>' + esc(cheapest.title) : 'нет данных'],
+        ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
+        ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+        ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
+      ];
+      els.insights.innerHTML = blocks.map((block) => '<article class="insight"><b>' + esc(block[0]) + '</b><div>' + block[1] + '</div></article>').join('');
+    }
+
+    function listingCell(row) {
+      const title = row.url
+        ? '<a class="title" href="' + esc(row.url) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
+        : '<span class="title">' + esc(row.title) + '</span>';
+      return title + (row.address ? '<div class="muted">' + esc(row.address) + '</div>' : '');
+    }
+
+    function renderTable(target, rows, columns, highlightCount = 0, options = {}) {
+      if (!rows.length) {
+        target.innerHTML = '<div class="empty">Нет данных для этого блока.</div>';
+        return;
+      }
+      const visibleRows = options.limit ? rows.slice(0, options.limit) : rows;
+      target.innerHTML = '<table><thead><tr>' + columns.map((col) => '<th>' + esc(col.label) + '</th>').join('') + '</tr></thead><tbody>' +
+        visibleRows.map((row, index) => {
+          const isTop = index < highlightCount;
+          return '<tr' + (isTop ? ' class="top-row"' : '') + '>' + columns.map((col, columnIndex) => {
+            const tag = isTop && columnIndex === 0 ? '<span class="top-tag">Топ-' + (index + 1) + '</span>' : '';
+            return '<td>' + tag + col.render(row, index) + '</td>';
+          }).join('') + '</tr>';
+        }).join('') +
+        '</tbody></table>' +
+        (options.tableKey && rows.length > visibleRows.length
+          ? '<div class="table-footer"><span>Показано ' + visibleRows.length + ' из ' + rows.length + '</span><button class="small-btn js-open-table" type="button" data-table="' + esc(options.tableKey) + '">Смотреть все</button></div>'
+          : '');
+    }
+
+    function renderTables() {
+      const periodLabel = getPeriodLabel(state.rows);
+      const baseColumns = [
+        { label: 'Объект', render: listingCell },
+        { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
+        { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
+        { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
+        { label: 'До Оли', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        { label: 'До Никиты', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+      ];
+      const cheap = state.rows.slice().sort((a, b) => a.rent - b.rent);
+      const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
+      const olya = state.rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
+      const nikita = state.rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+      const balanced = state.rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
+      const score = state.rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
+      const value = state.rows.filter((row) => row.priceM2 > 0).sort((a, b) => a.priceM2 - b.priceM2 || a.rent - b.rent);
+      const start = state.rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
+      const minute = state.rows.filter((row) => row.rubPerCommuteMin > 0).sort((a, b) => a.rubPerCommuteMin - b.rubPerCommuteMin || a.avgCommute - b.avgCommute);
+      const balancedColumns = [
+        ...baseColumns,
+        { label: 'Баланс', render: (row) => '<span class="badge">разница ' + minutesText(row.diffTime) + '</span>' },
+      ];
+      const scoreColumns = [
+        ...baseColumns,
+        { label: 'Оценка', render: (row) => '<span class="badge">' + row.finalScore + '/100 · ' + esc(row.grade) + '</span>' },
+      ];
+      const startColumns = [
+        ...baseColumns,
+        { label: 'Стартовый платёж', render: (row) => '<span class="money">' + rub(row.startPayment) + '</span><div class="muted">' + esc(row.moveInCostCategory) + '</div>' },
+      ];
+      const minuteColumns = [
+        ...baseColumns,
+        { label: '₽/мин пути', render: (row) => '<span class="money">' + rub(row.rubPerCommuteMin) + '</span><div class="muted">аренда / ' + esc(minutesText(Math.round(row.avgCommute))) + '</div>' },
+      ];
+
+      state.tableRows = { cheap, expensive, olya, nikita, balanced, score, value, start, minute };
+      state.tableColumns = { cheap: baseColumns, expensive: baseColumns, olya: baseColumns, nikita: baseColumns, balanced: balancedColumns, score: scoreColumns, value: scoreColumns, start: startColumns, minute: minuteColumns };
+      state.tableHighlights = { cheap: 8, expensive: 8, olya: 10, nikita: 10, balanced: 10, score: 10, value: 10, start: 10, minute: 10 };
+
+      renderTable(els.cheapTable, cheap, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap' });
+      renderTable(els.expensiveTable, expensive, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive' });
+      renderTable(els.olyaTable, olya, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'olya' });
+      renderTable(els.nikitaTable, nikita, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
+      renderTable(els.balancedTable, balanced, balancedColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced' });
+      renderTable(els.scoreTable, score, scoreColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'score' });
+      renderTable(els.valueTable, value, scoreColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'value' });
+      renderTable(els.startTable, start, startColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'start' });
+      renderTable(els.minuteTable, minute, minuteColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'minute' });
+      els.olyaAvg.textContent = 'вариантов: ' + olya.length + ', средняя аренда: ' + rub(average(olya.map((row) => row.rent)));
+      els.nikitaAvg.textContent = 'вариантов: ' + nikita.length + ', средняя аренда: ' + rub(average(nikita.map((row) => row.rent)));
+      els.balancedAvg.textContent = 'средняя аренда: ' + rub(average(balanced.map((row) => row.rent)));
+      els.scoreAvg.textContent = 'оценка: среднее из числовых показателей';
+      els.valueAvg.textContent = 'вариантов с площадью: ' + value.length;
+      els.startAvg.textContent = 'средний вход: ' + rub(average(start.map((row) => row.startPayment)));
+      els.minuteAvg.textContent = 'среднее: ' + rub(average(minute.map((row) => row.rubPerCommuteMin)));
+    }
+
+    function renderBuckets() {
+      const groups = [
+        ['до 60 мин', (row, key) => row[key] <= 60],
+        ['60-90 мин', (row, key) => row[key] > 60 && row[key] <= 90],
+        ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
+        ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
+      ];
+      const keys = [
+        ['Оля', 'olya'],
+        ['Никита', 'nikita'],
+        ['Оба маршрута', 'both'],
+      ];
+      const rows = [];
+      groups.forEach((group) => {
+        keys.forEach((key) => {
+          const list = key[1] === 'both'
+            ? state.rows.filter((row) => group[1](row, 'olya') && group[1](row, 'nikita'))
+            : state.rows.filter((row) => group[1](row, key[1]));
+          rows.push({ group: group[0], route: key[0], count: list.length, avg: average(list.map((row) => row.rent)), median: median(list.map((row) => row.rent)) });
+        });
+      });
+      renderTable(els.bucketsTable, rows, [
+        { label: 'Группа', render: (row) => esc(row.group) },
+        { label: 'Маршрут', render: (row) => esc(row.route) },
+        { label: 'Кол-во', render: (row) => '<span class="badge">' + row.count + '</span>' },
+        { label: 'Средняя аренда', render: (row) => '<span class="money">' + rub(row.avg) + '</span>' },
+        { label: 'Медиана', render: (row) => '<span class="money">' + rub(row.median) + '</span>' },
+      ]);
+
+      const categories = [];
+      const addCategoryRows = (title, field) => {
+        [...new Set(state.rows.map((row) => row[field]))].sort((a, b) => String(a).localeCompare(String(b), 'ru')).forEach((name) => {
+          const list = state.rows.filter((row) => row[field] === name);
+          categories.push({
+            type: title,
+            name,
+            count: list.length,
+            avg: average(list.map((row) => row.rent)),
+            median: median(list.map((row) => row.rent)),
+            avgStart: average(list.map((row) => row.startPayment)),
+            avgDiff: average(list.map((row) => row.diffTime)),
+          });
+        });
+      };
+      addCategoryRows('Баланс', 'balanceType');
+      addCategoryRows('Стартовый платёж', 'moveInCostCategory');
+      renderTable(els.categoryTable, categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count), [
+        { label: 'Тип', render: (row) => esc(row.type) },
+        { label: 'Категория', render: (row) => esc(row.name) },
+        { label: 'Кол-во', render: (row) => '<span class="badge">' + row.count + '</span>' },
+        { label: 'Средняя аренда', render: (row) => '<span class="money">' + rub(row.avg) + '</span>' },
+        { label: 'Медиана аренды', render: (row) => '<span class="money">' + rub(row.median) + '</span>' },
+        { label: 'Средний вход', render: (row) => '<span class="money">' + rub(row.avgStart) + '</span>' },
+        { label: 'Средняя разница', render: (row) => row.type === 'Баланс' ? '<span class="time">' + minutesText(Math.round(row.avgDiff)) + '</span>' : '<span class="muted">-</span>' },
+      ]);
+    }
+
+    function setFullViewVisible(isVisible) {
+      els.fullView.classList.toggle('hidden', !isVisible);
+      document.querySelectorAll('.analytics-section').forEach((section) => {
+        section.classList.toggle('hidden', isVisible);
+      });
+    }
+
+    function openFullTable(tableKey, options = {}) {
+      const rows = state.tableRows[tableKey] || [];
+      const columns = state.tableColumns[tableKey] || [];
+
+      if (!rows.length || !columns.length) {
+        setStatus('Сначала построй аналитику, потом можно открыть полную таблицу.', 'warn');
+        setFullViewVisible(false);
+        return;
+      }
+
+      els.fullTitle.textContent = tableTitles[tableKey] || 'Все варианты';
+      els.fullStatus.textContent = 'Всего вариантов: ' + rows.length;
+      renderTable(els.fullTable, rows, columns, state.tableHighlights[tableKey] || 0);
+      setFullViewVisible(true);
+
+      if (!options.skipHistory) {
+        history.pushState({ tableKey }, '', '/analytics?table=' + encodeURIComponent(tableKey));
+      }
+      els.fullView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function closeFullTable(options = {}) {
+      setFullViewVisible(false);
+      if (!options.skipHistory) {
+        history.pushState({}, '', '/analytics');
+      }
+    }
+
+    function openTableFromUrl() {
+      const tableKey = new URLSearchParams(location.search).get('table');
+      if (!tableKey) {
+        setFullViewVisible(false);
+        return;
+      }
+      openFullTable(tableKey, { skipHistory: true });
+    }
+
+    function renderAll() {
+      if (!state.rows.length) {
+        els.metrics.innerHTML = '';
+        els.insights.innerHTML = '';
+        setFullViewVisible(false);
+        [els.cheapTable, els.expensiveTable, els.olyaTable, els.nikitaTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.valueTable, els.startTable, els.minuteTable, els.categoryTable].forEach((el) => {
+          el.innerHTML = '<div class="empty">Загрузи JSON и нажми “Построить”.</div>';
+        });
+        return;
+      }
+      renderMetrics();
+      renderInsights();
+      renderTables();
+      renderBuckets();
+      openTableFromUrl();
+      setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + els.olyaKey.value + ', ' + els.nikitaKey.value + '.', 'ok');
+    }
+
+    function loadText(text) {
+      const parsed = unwrapJson(JSON.parse(text));
+      state.items = parsed;
+      state.timeKeys = detectTimeKeys(parsed);
+      fillTimeSelects();
+      prepareRows();
+      renderAll();
+    }
+
+    async function loadSavedAnalyticsData() {
+      try {
+        const response = await fetch('/api/analytics-data');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить сохранённый JSON.');
+        if (!Array.isArray(data.items) || !data.items.length) return;
+        els.jsonInput.value = JSON.stringify(data.items, null, 2);
+        state.items = data.items;
+        state.timeKeys = detectTimeKeys(data.items);
+        fillTimeSelects();
+        prepareRows();
+        renderAll();
+        const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
+        setStatus('Загружен сохранённый JSON: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+      } catch (error) {
+        setStatus('Сохранённый JSON не загружен: ' + (error?.message || String(error)), 'warn');
+      }
+    }
+
+    async function handleFile() {
+      const file = els.fileInput.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      els.jsonInput.value = text;
+      loadText(text);
+    }
+
+    function handleAnalyze() {
+      try {
+        if (!els.jsonInput.value.trim()) {
+          setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
+          return;
+        }
+        loadText(els.jsonInput.value);
+      } catch (error) {
+        state.items = [];
+        state.rows = [];
+        renderAll();
+        setStatus('Ошибка JSON: ' + (error?.message || String(error)), 'warn');
+      }
+    }
+
+    els.fileInput.addEventListener('change', handleFile);
+    els.analyzeBtn.addEventListener('click', handleAnalyze);
+    els.fastLimit.addEventListener('input', () => { if (state.items.length) { prepareRows(); renderAll(); } });
+    els.olyaKey.addEventListener('change', () => { if (state.items.length) { prepareRows(); renderAll(); } });
+    els.nikitaKey.addEventListener('change', () => { if (state.items.length) { prepareRows(); renderAll(); } });
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('.js-open-table');
+      if (!button) return;
+      openFullTable(button.dataset.table);
+    });
+    els.backToAnalytics.addEventListener('click', () => closeFullTable());
+    window.addEventListener('popstate', () => openTableFromUrl());
+    renderAll();
+    loadSavedAnalyticsData();
+  </script>
+</body>
+</html>`;
+
+const costsPage = String.raw`<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Расходы за 3 месяца</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b14;
+      --panel: rgba(15, 20, 33, 0.92);
+      --panel-strong: #12192a;
+      --text: #eef3fb;
+      --muted: #9ea9bc;
+      --line: #223046;
+      --accent: #6ea8ff;
+      --accent-strong: #8bbcff;
+      --good: #57d6b0;
+      --warn: #f2c36b;
+      --bad: #ff8080;
+      --shadow: 0 22px 50px rgba(0, 0, 0, 0.42);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(110, 168, 255, 0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(87, 214, 176, 0.08), transparent 24%),
+        linear-gradient(180deg, #070b14 0%, #0b1220 100%);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    button, input, select { font: inherit; }
+    .app {
+      width: min(1260px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 18px 0 24px;
+    }
+    .hero, .panel, .toolbar, .summary {
+      border: 1px solid rgba(110, 168, 255, 0.14);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .hero {
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      background: linear-gradient(180deg, rgba(18,25,42,0.96), rgba(12,18,31,0.96));
+    }
+    .hero-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 28px; line-height: 1.12; letter-spacing: -0.02em; }
+    p { margin: 10px 0 0; color: var(--muted); line-height: 1.55; max-width: 880px; }
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .link-btn, .action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 14px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 800;
+      white-space: nowrap;
+      border: 1px solid rgba(110, 168, 255, 0.18);
+      background: rgba(17, 25, 42, 0.9);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .action-btn {
+      border-color: rgba(87, 214, 176, 0.3);
+      background: linear-gradient(180deg, rgba(87, 214, 176, 0.24), rgba(42, 142, 120, 0.22));
+    }
+    .link-btn:hover, .action-btn:hover { border-color: rgba(139, 188, 255, 0.55); }
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 140px 190px 180px auto;
+      gap: 10px;
+      align-items: end;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+      color: #c9d5e5;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    input, select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid rgba(110, 168, 255, 0.16);
+      border-radius: 12px;
+      background: #0c1322;
+      color: var(--text);
+      outline: none;
+      padding: 0 12px;
+    }
+    input[type="file"] { padding: 8px 10px; color: var(--muted); }
+    input:focus, select:focus { border-color: rgba(139, 188, 255, 0.62); }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .metric {
+      min-height: 78px;
+      border: 1px solid rgba(110, 168, 255, 0.1);
+      border-radius: 12px;
+      background: rgba(12, 19, 34, 0.76);
+      padding: 12px;
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+    .panel { overflow: hidden; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(18, 25, 42, 0.72);
+    }
+    .panel-title { font-size: 16px; font-weight: 900; }
+    .status { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .status.ok { color: var(--good); }
+    .status.warn { color: var(--warn); }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(34, 48, 70, 0.76);
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      color: #c9d5e5;
+      background: rgba(11, 18, 32, 0.82);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    td { color: #dce6f4; font-size: 14px; }
+    .money { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 800; }
+    .total { color: var(--good); font-size: 16px; }
+    .object { min-width: 280px; }
+    .title {
+      color: var(--text);
+      font-weight: 850;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+    a.title:hover { color: var(--accent-strong); }
+    .address {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .notes {
+      display: grid;
+      gap: 4px;
+      min-width: 170px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .notes .warn { color: var(--warn); }
+    .empty {
+      padding: 28px 16px;
+      color: var(--muted);
+      text-align: center;
+      font-weight: 700;
+    }
+    @media (max-width: 900px) {
+      .toolbar { grid-template-columns: 1fr 1fr; }
+      .action-btn { width: 100%; }
+      .summary { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 560px) {
+      .app { width: min(100% - 16px, 1260px); padding-top: 10px; }
+      .hero, .toolbar, .summary { border-radius: 12px; }
+      h1 { font-size: 24px; }
+      .toolbar, .summary { grid-template-columns: 1fr; }
+      .link-btn, .action-btn { width: 100%; }
+      .nav { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div class="hero-top">
+        <h1>Расходы за 3 месяца</h1>
+        <div class="nav">
+          <a class="link-btn" href="/">Фильтр</a>
+          <a class="link-btn" href="/merge">Объединить JSON</a>
+          <a class="link-btn" href="/analytics">Аналитика</a>
+        </div>
+      </div>
+      <p>Загрузи JSON с объявлениями: страница посчитает аренду за выбранное количество месяцев, комиссию агентства и залог по каждому объекту.</p>
+    </section>
+
+    <section class="toolbar">
+      <label class="field">
+        JSON-файл
+        <input id="fileInput" type="file" accept=".json,application/json">
+      </label>
+      <label class="field">
+        Месяцев
+        <input id="monthsInput" type="number" min="1" max="24" step="1" value="3">
+      </label>
+      <label class="field">
+        Сортировка
+        <select id="sortMode">
+          <option value="total-desc">Итог: дороже</option>
+          <option value="total-asc">Итог: дешевле</option>
+          <option value="rent-asc">Аренда: дешевле</option>
+          <option value="deposit-desc">Залог: больше</option>
+        </select>
+      </label>
+      <label class="field">
+        Поиск
+        <input id="searchInput" type="text" placeholder="адрес или название">
+      </label>
+      <button id="downloadBtn" class="action-btn" type="button" disabled>Скачать расчёт</button>
+    </section>
+
+    <section class="summary" aria-live="polite">
+      <div class="metric"><span>Объектов</span><strong id="countMetric">0</strong></div>
+      <div class="metric"><span>Минимум</span><strong id="minMetric">0 ₽</strong></div>
+      <div class="metric"><span>Медиана</span><strong id="medianMetric">0 ₽</strong></div>
+      <div class="metric"><span>Максимум</span><strong id="maxMetric">0 ₽</strong></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Расчёт по объектам</div>
+        <div id="status" class="status">Выбери JSON-файл</div>
+      </div>
+      <div id="tableWrap" class="table-wrap">
+        <div class="empty">Пока данных нет.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      fileInput: document.querySelector('#fileInput'),
+      monthsInput: document.querySelector('#monthsInput'),
+      sortMode: document.querySelector('#sortMode'),
+      searchInput: document.querySelector('#searchInput'),
+      downloadBtn: document.querySelector('#downloadBtn'),
+      countMetric: document.querySelector('#countMetric'),
+      minMetric: document.querySelector('#minMetric'),
+      medianMetric: document.querySelector('#medianMetric'),
+      maxMetric: document.querySelector('#maxMetric'),
+      status: document.querySelector('#status'),
+      tableWrap: document.querySelector('#tableWrap'),
+    };
+
+    const state = {
+      items: [],
+      rows: [],
+      fileName: '',
+    };
+
+    function esc(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function displayText(value) {
+      return String(value ?? '').trim();
+    }
+
+    function unwrapJson(value) {
+      if (Array.isArray(value)) return value;
+      if (Array.isArray(value?.result)) return value.result;
+      if (Array.isArray(value?.items)) return value.items;
+      if (Array.isArray(value?.data)) return value.data;
+      throw new Error('JSON должен быть массивом объектов или объектом с result/items/data.');
+    }
+
+    function rub(value) {
+      if (!Number.isFinite(value)) return '0 ₽';
+      return new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency: 'RUB',
+        maximumFractionDigits: 0,
+      }).format(Math.round(value));
+    }
+
+    function parseMoney(value) {
+      const text = String(value ?? '').replace(/\u00a0/g, ' ');
+      const matches = [...text.matchAll(/(\d[\d\s.]*)\s*(?:₽|руб|р\.?)/gi)];
+      if (matches.length) {
+        const valueText = matches[0][1].replace(/[^\d.]/g, '');
+        const parsed = Number(valueText);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+
+      const fallback = text.match(/(\d[\d\s]{2,})/);
+      if (!fallback) return 0;
+      const parsed = Number(fallback[1].replace(/\D/g, ''));
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function parsePrice(item) {
+      return parseMoney(item?.price ?? item?.Price ?? item?.цена ?? '');
+    }
+
+    function findCommissionPercent(item) {
+      const source = [item?.dop, item?.description].map(displayText).join(' ');
+      const match = source.match(/комисс\w*[^0-9]{0,24}(\d{1,3})\s*%/i);
+      if (!match) return null;
+      const percent = Number(match[1]);
+      return Number.isFinite(percent) ? Math.max(0, percent) : null;
+    }
+
+    function findDeposit(item, monthlyPrice) {
+      const source = [item?.dop, item?.description].map(displayText).join(' ');
+      const depositMatch = source.match(/(?:залог|депозит)[^0-9₽р]{0,40}(\d[\d\s.]*)\s*(?:₽|руб|р\.?)/i);
+      if (depositMatch) {
+        const parsed = parseMoney(depositMatch[0]);
+        return { value: parsed, found: true, inferred: false };
+      }
+
+      const oneMonthMatch = source.match(/(?:залог|депозит)[^.]{0,80}(?:месяц|мес|размере месячной|один)/i);
+      if (oneMonthMatch && monthlyPrice > 0) {
+        return { value: monthlyPrice, found: true, inferred: true };
+      }
+
+      return { value: 0, found: false, inferred: false };
+    }
+
+    function getTitle(item) {
+      return displayText(item?.title ?? item?.name ?? item?.название ?? 'Без названия');
+    }
+
+    function getAddress(item) {
+      return displayText(item?.adress ?? item?.address ?? item?.адрес ?? '');
+    }
+
+    function getLink(item) {
+      return displayText(item?.url ?? item?.link ?? item?.href ?? '');
+    }
+
+    function calculateRow(item) {
+      const months = Math.max(1, Math.min(Number(els.monthsInput.value || 3), 24));
+      const rent = parsePrice(item);
+      const rentForPeriod = rent * months;
+      const commissionPercent = findCommissionPercent(item);
+      const commission = commissionPercent === null ? 0 : rent * commissionPercent / 100;
+      const deposit = findDeposit(item, rent);
+      const total = rentForPeriod + commission + deposit.value;
+
+      return {
+        item,
+        title: getTitle(item),
+        address: getAddress(item),
+        link: getLink(item),
+        months,
+        rent,
+        rentForPeriod,
+        commissionPercent,
+        commission,
+        deposit,
+        total,
+      };
+    }
+
+    function setStatus(text, tone = 'info') {
+      els.status.textContent = text;
+      els.status.className = 'status' + (tone === 'info' ? '' : ' ' + tone);
+    }
+
+    function getVisibleRows() {
+      const query = els.searchInput.value.trim().toLowerCase();
+      const sortMode = els.sortMode.value;
+      const rows = state.rows.filter((row) => {
+        if (!query) return true;
+        return (row.title + ' ' + row.address).toLowerCase().includes(query);
+      });
+
+      rows.sort((a, b) => {
+        if (sortMode === 'total-asc') return a.total - b.total;
+        if (sortMode === 'rent-asc') return a.rent - b.rent;
+        if (sortMode === 'deposit-desc') return b.deposit.value - a.deposit.value;
+        return b.total - a.total;
+      });
+
+      return rows;
+    }
+
+    function renderSummary(rows) {
+      els.countMetric.textContent = String(rows.length);
+      if (!rows.length) {
+        els.minMetric.textContent = '0 ₽';
+        els.medianMetric.textContent = '0 ₽';
+        els.maxMetric.textContent = '0 ₽';
+        return;
+      }
+
+      const totals = rows.map((row) => row.total);
+      const sortedTotals = totals.slice().sort((a, b) => a - b);
+      const middle = Math.floor(sortedTotals.length / 2);
+      const median = sortedTotals.length % 2
+        ? sortedTotals[middle]
+        : (sortedTotals[middle - 1] + sortedTotals[middle]) / 2;
+      els.minMetric.textContent = rub(Math.min(...totals));
+      els.medianMetric.textContent = rub(median);
+      els.maxMetric.textContent = rub(Math.max(...totals));
+    }
+
+    function renderRows() {
+      const rows = getVisibleRows();
+      renderSummary(rows);
+      els.downloadBtn.disabled = !rows.length;
+
+      if (!rows.length) {
+        els.tableWrap.innerHTML = '<div class="empty">Ничего не найдено.</div>';
+        setStatus(state.items.length ? 'Нет объектов под поиск.' : 'Выбери JSON-файл', state.items.length ? 'warn' : 'info');
+        return;
+      }
+
+      els.tableWrap.innerHTML = [
+        '<table>',
+          '<thead><tr>',
+            '<th>Объект</th>',
+            '<th>Аренда в месяц</th>',
+            '<th>За период</th>',
+            '<th>Комиссия</th>',
+            '<th>Залог</th>',
+            '<th>Итого</th>',
+            '<th>Разбор</th>',
+          '</tr></thead>',
+          '<tbody>',
+            rows.map((row) => {
+              const title = row.link
+                ? '<a class="title" href="' + esc(row.link) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
+                : '<div class="title">' + esc(row.title) + '</div>';
+              const commissionText = row.commissionPercent === null ? 'не найдена' : row.commissionPercent + '%';
+              const depositNote = row.deposit.found
+                ? row.deposit.inferred ? 'залог принят как 1 месяц' : 'залог найден'
+                : 'залог не найден';
+              const warnings = [
+                row.commissionPercent === null ? '<span class="warn">Комиссия не найдена, считается 0 ₽</span>' : '',
+                row.deposit.found ? '' : '<span class="warn">Залог не найден, считается 0 ₽</span>',
+              ].filter(Boolean).join('');
+              const formula = rub(row.rent) + ' × ' + row.months + ' мес. + ' + rub(row.commission) + ' + ' + rub(row.deposit.value);
+
+              return [
+                '<tr>',
+                  '<td class="object">' + title + (row.address ? '<div class="address">' + esc(row.address) + '</div>' : '') + '</td>',
+                  '<td class="money">' + rub(row.rent) + '</td>',
+                  '<td class="money">' + rub(row.rentForPeriod) + '</td>',
+                  '<td><div class="money">' + rub(row.commission) + '</div><div class="address">' + esc(commissionText) + '</div></td>',
+                  '<td><div class="money">' + rub(row.deposit.value) + '</div><div class="address">' + esc(depositNote) + '</div></td>',
+                  '<td class="money total">' + rub(row.total) + '</td>',
+                  '<td><div class="notes"><span>' + esc(formula) + '</span>' + warnings + '</div></td>',
+                '</tr>',
+              ].join('');
+            }).join(''),
+          '</tbody>',
+        '</table>',
+      ].join('');
+
+      setStatus('Показано объектов: ' + rows.length + ' из ' + state.items.length, 'ok');
+    }
+
+    async function handleFile() {
+      const file = els.fileInput.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        state.items = unwrapJson(JSON.parse(text));
+        state.fileName = file.name;
+        state.rows = state.items.map(calculateRow);
+        renderRows();
+      } catch (error) {
+        state.items = [];
+        state.rows = [];
+        renderRows();
+        setStatus(error?.message || String(error), 'warn');
+      }
+    }
+
+    function recalculate() {
+      state.rows = state.items.map(calculateRow);
+      renderRows();
+    }
+
+    function downloadRows() {
+      const rows = getVisibleRows().map((row) => ({
+        ...row.item,
+        months: row.months,
+        rent_per_month: Math.round(row.rent),
+        rent_for_period: Math.round(row.rentForPeriod),
+        commission_percent: row.commissionPercent,
+        commission: Math.round(row.commission),
+        deposit: Math.round(row.deposit.value),
+        total_for_period: Math.round(row.total),
+      }));
+
+      const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'costs-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
+
+    els.fileInput.addEventListener('change', handleFile);
+    els.monthsInput.addEventListener('input', recalculate);
+    els.sortMode.addEventListener('change', renderRows);
+    els.searchInput.addEventListener('input', renderRows);
+    els.downloadBtn.addEventListener('click', downloadRows);
+
+    renderRows();
+  </script>
+</body>
+</html>`;
+
 const mergePage = String.raw`<!doctype html>
 <html lang="ru">
 <head>
@@ -1526,7 +3106,11 @@ const mergePage = String.raw`<!doctype html>
           <h1>Объединение JSON</h1>
           <p>Выбери два JSON-файла, извлеки из них массивы и получи один объединённый массив для скачивания.</p>
         </div>
-        <a class="back-link" href="/">На главный сайт</a>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <a class="back-link" href="/">На главный сайт</a>
+          <a class="back-link" href="/costs">Расходы за 3 месяца</a>
+          <a class="back-link" href="/analytics">Аналитика</a>
+        </div>
       </div>
     </section>
 
@@ -1669,6 +3253,206 @@ const mergePage = String.raw`<!doctype html>
 </body>
 </html>`;
 
+const analyticsAdminPage = String.raw`<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Панель аналитики</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080a10;
+      --panel: rgba(18, 21, 30, 0.94);
+      --panel-strong: #171b26;
+      --text: #f3f6fb;
+      --muted: #a9b1c0;
+      --line: #2a3140;
+      --accent: #7cc7a8;
+      --warn: #ffd36e;
+      --bad: #ff8585;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 0%, rgba(124, 199, 168, 0.18), transparent 28%),
+        linear-gradient(180deg, #080a10 0%, #111520 100%);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    button, input, textarea { font: inherit; }
+    .app { width: min(980px, calc(100vw - 24px)); margin: 0 auto; padding: 18px 0 26px; }
+    .hero, .panel {
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .hero { padding: 18px 20px; margin-bottom: 14px; background: linear-gradient(180deg, rgba(26,31,43,0.96), rgba(16,20,29,0.96)); }
+    .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 28px; }
+    p { margin: 8px 0 0; color: var(--muted); line-height: 1.5; }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    .link-btn, .action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 40px; padding: 0 13px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1); background: #202637;
+      color: var(--text); text-decoration: none; font-weight: 800; white-space: nowrap; cursor: pointer;
+    }
+    .action-btn.primary { background: var(--accent); color: #07120e; border-color: var(--accent); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--panel-strong); border-bottom: 1px solid var(--line); }
+    .panel-title { font-size: 15px; font-weight: 900; }
+    .status { color: var(--muted); font-size: 13px; }
+    .panel-body { display: grid; gap: 12px; padding: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .field { display: grid; gap: 6px; color: #d8dfeb; font-size: 13px; font-weight: 750; }
+    input, textarea {
+      width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+      background: #101520; color: var(--text); outline: none;
+    }
+    input { min-height: 40px; padding: 0 11px; }
+    input[type="file"] { padding: 8px 10px; color: var(--muted); }
+    textarea { min-height: 420px; padding: 12px; resize: vertical; font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .pill { display: inline-flex; min-height: 32px; align-items: center; padding: 0 10px; border-radius: 999px; background: rgba(124,199,168,0.12); color: #dfffee; font-size: 13px; font-weight: 800; }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+      .link-btn, .action-btn { width: 100%; }
+      .nav { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Панель управления аналитикой</h1>
+          <p>Здесь сохраняется JSON для страницы аналитики. После сохранения страница /analytics будет открывать эти данные с любого устройства, у которого есть доступ к сайту.</p>
+        </div>
+        <nav class="nav">
+          <a class="link-btn" href="/analytics">Аналитика</a>
+          <a class="link-btn" href="/">Фильтр</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Сохранённый JSON</div>
+        <div id="status" class="status">Загружаю состояние...</div>
+      </div>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="field">Админ-ключ <input id="adminKey" type="password" placeholder="ANALYTICS_ADMIN_KEY"></label>
+          <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
+        </div>
+        <div class="row">
+          <button id="loadSavedBtn" class="action-btn" type="button">Загрузить сохранённый</button>
+          <button id="saveBtn" class="action-btn primary" type="button">Сохранить JSON</button>
+          <span class="pill">Объектов: <span id="countInfo" style="margin-left:6px;">0</span></span>
+          <span class="pill">Обновлено: <span id="updatedInfo" style="margin-left:6px;">нет</span></span>
+        </div>
+        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000}]'></textarea>
+        <p class="warn">Ключ не сохраняется в браузере. Без переменной окружения <code>ANALYTICS_ADMIN_KEY</code> сервер не разрешит запись.</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      adminKey: document.querySelector('#adminKey'),
+      fileInput: document.querySelector('#fileInput'),
+      loadSavedBtn: document.querySelector('#loadSavedBtn'),
+      saveBtn: document.querySelector('#saveBtn'),
+      jsonInput: document.querySelector('#jsonInput'),
+      status: document.querySelector('#status'),
+      countInfo: document.querySelector('#countInfo'),
+      updatedInfo: document.querySelector('#updatedInfo'),
+    };
+
+    function unwrapJson(value) {
+      if (Array.isArray(value)) return value;
+      if (Array.isArray(value?.result)) return value.result;
+      if (Array.isArray(value?.items)) return value.items;
+      if (Array.isArray(value?.data)) return value.data;
+      throw new Error('JSON должен быть массивом или объектом с result/items/data.');
+    }
+
+    function setStatus(text, tone = 'info') {
+      els.status.textContent = text;
+      els.status.style.color = tone === 'ok' ? 'var(--accent)' : tone === 'warn' ? 'var(--warn)' : tone === 'bad' ? 'var(--bad)' : 'var(--muted)';
+    }
+
+    function updateCountFromText() {
+      try {
+        const items = unwrapJson(JSON.parse(els.jsonInput.value || '[]'));
+        els.countInfo.textContent = String(items.length);
+        return items;
+      } catch {
+        els.countInfo.textContent = 'ошибка JSON';
+        return null;
+      }
+    }
+
+    async function loadSaved() {
+      try {
+        const response = await fetch('/api/analytics-data');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить JSON.');
+        els.jsonInput.value = JSON.stringify(data.items || [], null, 2);
+        els.countInfo.textContent = String(data.count || 0);
+        els.updatedInfo.textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleString('ru-RU') : 'нет';
+        setStatus('Сохранённый JSON загружен.', 'ok');
+      } catch (error) {
+        setStatus(error?.message || String(error), 'bad');
+      }
+    }
+
+    async function saveJson() {
+      try {
+        const items = updateCountFromText();
+        if (!items) throw new Error('Проверь JSON перед сохранением.');
+        const key = els.adminKey.value.trim();
+        if (!key) throw new Error('Введи админ-ключ.');
+        const response = await fetch('/api/analytics-data', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
+          body: JSON.stringify(items),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось сохранить JSON.');
+        els.countInfo.textContent = String(data.count || items.length);
+        els.updatedInfo.textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleString('ru-RU') : 'только что';
+        setStatus('JSON сохранён. Теперь /analytics будет брать эти данные.', 'ok');
+      } catch (error) {
+        setStatus(error?.message || String(error), 'bad');
+      }
+    }
+
+    async function handleFile() {
+      const file = els.fileInput.files?.[0];
+      if (!file) return;
+      els.jsonInput.value = await file.text();
+      updateCountFromText();
+      setStatus('Файл загружен в поле. Нажми “Сохранить JSON”, чтобы записать на сервер.', 'ok');
+    }
+
+    els.fileInput.addEventListener('change', handleFile);
+    els.jsonInput.addEventListener('input', updateCountFromText);
+    els.loadSavedBtn.addEventListener('click', loadSaved);
+    els.saveBtn.addEventListener('click', saveJson);
+    loadSaved();
+  </script>
+</body>
+</html>`;
+
 function createServer() {
   return http.createServer(async (req, res) => {
     try {
@@ -1684,6 +3468,31 @@ function createServer() {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/costs') {
+        htmlResponse(res, costsPage);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics') {
+        htmlResponse(res, analyticsPage);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics-admin') {
+        htmlResponse(res, analyticsAdminPage);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/analytics-data') {
+        await handleGetAnalyticsData(req, res);
+        return;
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/api/analytics-data') {
+        await handleSaveAnalyticsData(req, res);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/preview-images') {
         await handlePreviewImages(req, res);
         return;
@@ -1691,7 +3500,7 @@ function createServer() {
 
       jsonResponse(res, 404, { error: 'Not found' });
     } catch (error) {
-      jsonResponse(res, 500, { error: error?.message || String(error) });
+      jsonResponse(res, error?.status || 500, { error: error?.message || String(error) });
     }
   });
 }
