@@ -871,19 +871,24 @@ const page = String.raw`<!doctype html>
       const normalized = String(key ?? '').trim();
       if (!normalized) return false;
       if (preferredTimeKeys.includes(normalized)) return true;
-      return !ignoredTimeKeyNames.has(normalized.toLowerCase());
+      if (ignoredTimeKeyNames.has(normalized.toLowerCase())) return false;
+      return /время|маршрут|дорог|путь|работ|родин|ол|никит|time|route/i.test(normalized);
     }
 
     function detectTimeKeys(items) {
       const keys = new Set(items.flatMap((item) => Object.keys(item)));
       const preferred = preferredTimeKeys.filter((key) => keys.has(key));
+      if (preferred.length) return preferred;
 
       const detected = [...keys].filter((key) => {
         if (!canAutoDetectTimeKey(key)) return false;
         const values = items
           .map((item) => item[key])
           .filter((value) => value !== undefined && value !== null);
-        return values.length > 0 && values.some(isCompactTimeValue);
+        return values.length > 0 && values.some((value) => {
+          if (typeof value === 'number' && !preferredTimeKeys.includes(key)) return false;
+          return isCompactTimeValue(value);
+        });
       });
 
       return [...new Set([...preferred, ...detected])];
@@ -1902,9 +1907,12 @@ const analyticsPage = String.raw`<!doctype html>
           if (ignored.has(lower) || keys.includes(key)) return;
           const value = item[key];
           const text = String(value ?? '').toLowerCase();
-          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родина|оли|никит|time|route/.test(lower);
+          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|time|route/.test(lower);
           const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
-          if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) keys.push(key);
+          if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
+            if (typeof value === 'number' && !looksLikeRoute) return;
+            keys.push(key);
+          }
         });
       });
       return keys.sort((a, b) => {

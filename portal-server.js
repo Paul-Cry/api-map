@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
+const MAX_PORT_ATTEMPTS = 10;
 
 const services = {
   feed: {
@@ -79,7 +80,22 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/analytics") {
+      await proxy(req, res, services.filter, "/analytics" + url.search);
+      return;
+    }
+
+    if (url.pathname === "/analytics-admin") {
+      await proxy(req, res, services.filter, "/analytics-admin" + url.search);
+      return;
+    }
+
     if (url.pathname === "/api/preview-images") {
+      await proxy(req, res, services.filter, url.pathname + url.search);
+      return;
+    }
+
+    if (url.pathname === "/api/analytics-data") {
       await proxy(req, res, services.filter, url.pathname + url.search);
       return;
     }
@@ -112,13 +128,30 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Portal: http://localhost:${PORT}`);
-  console.log(`Feed:   http://localhost:${PORT}/feed`);
-  console.log(`Admin:  http://localhost:${PORT}/admin`);
-  console.log(`Worker: http://localhost:${PORT}/worker`);
-  console.log(`Filter: http://localhost:${PORT}/filter`);
-});
+listenWithFallback(PORT);
+
+function listenWithFallback(startPort, attemptsLeft = MAX_PORT_ATTEMPTS) {
+  const listener = server.listen(startPort, HOST, () => {
+    const address = listener.address();
+    const boundPort = typeof address === "object" && address ? address.port : startPort;
+    console.log(`Portal: http://localhost:${boundPort}`);
+    console.log(`Feed:   http://localhost:${boundPort}/feed`);
+    console.log(`Admin:  http://localhost:${boundPort}/admin`);
+    console.log(`Worker: http://localhost:${boundPort}/worker`);
+    console.log(`Filter: http://localhost:${boundPort}/filter`);
+  });
+
+  listener.on("error", (error) => {
+    if (error?.code === "EADDRINUSE" && attemptsLeft > 0) {
+      const nextPort = startPort + 1;
+      console.warn(`Port ${startPort} занят, пробую ${nextPort}...`);
+      listenWithFallback(nextPort, attemptsLeft - 1);
+      return;
+    }
+
+    throw error;
+  });
+}
 
 function startService(service) {
   const child = spawn(process.execPath, [service.entry], {
@@ -250,6 +283,12 @@ function dashboardPage() {
         <h2>Фильтр объявлений</h2>
         <p>Фильтрация объектов, превью картинок и экспорт результата.</p>
         <div class="path">/filter</div>
+      </a>
+      <a class="card" href="/analytics">
+        <span class="label">Аналитика</span>
+        <h2>Аналитика аренды</h2>
+        <p>Загрузка JSON и разбор рынка: средняя цена, медиана, дешёвые и дорогие варианты, баланс и метрики входа.</p>
+        <div class="path">/analytics</div>
       </a>
     </div>
   </main>
