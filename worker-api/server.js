@@ -76,19 +76,21 @@ function sendDownload(res, filename, payload) {
 
 function splitIntoChunks(items, count) {
   const safeCount = Math.max(1, Math.min(Number(count) || 1, items.length || 1));
-  const chunks = Array.from({ length: safeCount }, () => []);
+  const baseSize = Math.floor(items.length / safeCount);
+  const remainder = items.length % safeCount;
+  const chunks = [];
+  let start = 0;
 
-  items.forEach((item, index) => {
-    chunks[index % safeCount].push(item);
-  });
+  for (let index = 0; index < safeCount; index += 1) {
+    const size = baseSize + (index < remainder ? 1 : 0);
+    const end = start + size;
+    if (size > 0) {
+      chunks.push(items.slice(start, end));
+    }
+    start = end;
+  }
 
-  return chunks.filter((chunk) => chunk.length > 0);
-}
-
-function getBalancedChunkCount(itemsLength, requestedWorkers) {
-  const workerCount = Math.max(1, Number(requestedWorkers) || 1);
-  const targetChunks = workerCount * 3;
-  return Math.max(workerCount, Math.min(itemsLength || 1, targetChunks));
+  return chunks;
 }
 
 function activeWorkers() {
@@ -536,9 +538,7 @@ function dashboardHtml() {
         <h2>Запуск JSON</h2>
         <div class="form">
           <input id="jsonFile" type="file" accept=".json,application/json">
-          <label class="muted" for="workersCount">На сколько примерно равных частей делить</label>
-          <input id="workersCount" type="number" min="1" value="4">
-          <div class="muted">Для более ровной нагрузки сервер может разбить файл на большее число мелких задач.</div>
+          <div class="muted">Сервер сам делит файл по количеству подключённых worker'ов.</div>
           <button id="runButton" disabled>Запустить обработку</button>
           <div id="message">Выбери JSON-файл.</div>
         </div>
@@ -788,11 +788,10 @@ function dashboardHtml() {
       $('runButton').disabled = true;
       setMessage('Отправляю JSON в очередь...');
       try {
-        const workers = Math.max(1, Number($('workersCount').value || 1));
         const response = await fetch('/api/run', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ items: state.fileItems, workers }),
+          body: JSON.stringify({ items: state.fileItems }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Не удалось запустить обработку.');
@@ -991,10 +990,8 @@ async function handleRequest(req, res) {
       return;
     }
 
-    const readyWorkers = activeWorkers().filter((worker) => worker.status === 'ready');
-    const requestedWorkers = Number(body?.workers || readyWorkers.length || 1);
-    const chunkCount = getBalancedChunkCount(items.length, requestedWorkers);
-    const chunks = splitIntoChunks(items, chunkCount);
+    const connectedWorkers = Math.max(1, activeWorkers().length || 1);
+    const chunks = splitIntoChunks(items, connectedWorkers);
     const batchId = randomUUID();
     const batch = {
       batchId,
@@ -1030,7 +1027,7 @@ async function handleRequest(req, res) {
       batchId,
       jobsQueued: batch.jobIds.length,
       workersConnected: activeWorkers().length,
-      workersReady: readyWorkers.length,
+      workersReady: activeWorkers().filter((worker) => worker.status === 'ready').length,
     });
     return;
   }
