@@ -209,6 +209,18 @@ function updateWorker(workerId, patch = {}) {
   return next;
 }
 
+function emptyProgress() {
+  return {
+    objectsDone: 0,
+    objectsTotal: 0,
+    objectsRemaining: 0,
+    routesDone: 0,
+    routesTotal: 0,
+    routesRemaining: 0,
+    currentObjectIndex: null,
+  };
+}
+
 function setWorkerStop(workerId, reason = 'manual stop') {
   const existing = workers.get(workerId) || { workerId };
   return updateWorker(workerId, {
@@ -246,6 +258,15 @@ function clearAllWorkersStop() {
   return affected;
 }
 
+function clearWorkerReset(workerId) {
+  const existing = workers.get(workerId) || { workerId };
+  return updateWorker(workerId, {
+    resetRequestedAt: null,
+    resetJobId: null,
+    status: existing.stopRequestedAt ? existing.status || 'ready' : 'ready',
+  });
+}
+
 function deleteJob(jobId, reason = 'manual delete') {
   const job = jobs.get(jobId);
   if (!job) return null;
@@ -268,8 +289,13 @@ function deleteJob(jobId, reason = 'manual delete') {
     const worker = workers.get(job.workerId);
     if (worker) {
       updateWorker(job.workerId, {
-        status: worker.stopRequestedAt ? 'stopped' : 'busy',
-        progress: worker.progress || {},
+        status: 'ready',
+        currentJobId: null,
+        stopRequestedAt: null,
+        stopReason: '',
+        progress: emptyProgress(),
+        resetRequestedAt: nowIso(),
+        resetJobId: job.jobId,
       });
     }
   }
@@ -840,6 +866,43 @@ async function handleRequest(req, res) {
     }
 
     const existing = workers.get(workerId) || { workerId };
+    if (existing.resetJobId) {
+      if (body?.currentJobId === existing.resetJobId) {
+        const worker = updateWorker(workerId, {
+          name: body?.name || '',
+          status: 'ready',
+          currentJobId: null,
+          progress: body?.progress || {},
+          resetRequestedAt: null,
+          resetJobId: null,
+          stopRequestedAt: null,
+          stopReason: '',
+        });
+        sendJson(res, 200, {
+          ok: true,
+          command: 'delete',
+          deletedJobId: existing.resetJobId,
+          worker: workerView(worker),
+        });
+        return;
+      }
+
+      if (!body?.currentJobId || body?.status === 'ready') {
+        const worker = updateWorker(workerId, {
+          name: body?.name || '',
+          status: 'ready',
+          currentJobId: null,
+          progress: body?.progress || {},
+          resetRequestedAt: null,
+          resetJobId: null,
+          stopRequestedAt: null,
+          stopReason: '',
+        });
+        sendJson(res, 200, { ok: true, worker: workerView(worker) });
+        return;
+      }
+    }
+
     const requestedStatus = body?.status || 'ready';
     const status = existing.stopRequestedAt
       ? existing.currentJobId
@@ -857,6 +920,8 @@ async function handleRequest(req, res) {
       progress: body?.progress || {},
       stopRequestedAt: existing.stopRequestedAt || null,
       stopReason: existing.stopReason || '',
+      resetRequestedAt: existing.resetRequestedAt || null,
+      resetJobId: existing.resetJobId || null,
     });
     sendJson(res, 200, { ok: true, worker: workerView(worker) });
     return;
@@ -916,6 +981,17 @@ async function handleRequest(req, res) {
   if (req.method === 'GET' && jobPollMatch) {
     const workerId = decodeURIComponent(jobPollMatch[1]);
     const existing = workers.get(workerId);
+    if (existing?.resetJobId) {
+      const worker = clearWorkerReset(workerId);
+      sendJson(res, 200, {
+        ok: true,
+        job: null,
+        command: 'delete',
+        deletedJobId: existing.resetJobId,
+        worker: workerView(worker),
+      });
+      return;
+    }
     if (existing?.currentJobId) {
       const currentJob = jobs.get(existing.currentJobId);
       if (currentJob?.status === 'deleted') {

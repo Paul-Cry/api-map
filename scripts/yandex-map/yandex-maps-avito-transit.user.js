@@ -563,8 +563,31 @@
     render();
   }
 
+  function requestLocalReset(reason = 'Удалено через API') {
+    stopSequence += 1;
+    if (currentJobTimer) window.clearTimeout(currentJobTimer);
+    if (navigationTimer) window.clearTimeout(navigationTimer);
+    currentJobTimer = null;
+    navigationTimer = null;
+    const state = readState();
+    state.running = false;
+    state.items = [];
+    state.jobs = [];
+    state.currentJob = null;
+    state.remoteJob = null;
+    state.done = 0;
+    state.total = 0;
+    state.lastError = reason;
+    writeState(state);
+    render();
+  }
+
   function handleWorkerControl(payload) {
     const status = payload?.worker?.status || '';
+    if (payload?.command === 'delete' || status === 'deleted') {
+      requestLocalReset('Удалено через API');
+      return true;
+    }
     if (payload?.command === 'stop' || status === 'stopping' || status === 'stopped') {
       requestLocalStop('Остановлено через API');
       setWorkerEnabled(false);
@@ -625,6 +648,12 @@
       scheduleWorkerPoll(1000);
     } catch (error) {
       logError(`Worker failed to submit API job ${jobId}`, error);
+      if (/deleted|410/i.test(String(error?.message || ''))) {
+        requestLocalReset('Удалено через API');
+        heartbeat('ready').catch(() => { });
+        scheduleWorkerPoll(WORKER_POLL_MS);
+        return;
+      }
       const nextState = readState();
       nextState.lastError = error?.message || String(error);
       writeState(nextState);

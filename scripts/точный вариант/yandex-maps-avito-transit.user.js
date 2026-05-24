@@ -386,6 +386,20 @@
     render();
   }
 
+  function requestLocalReset(reason = 'Удалено через API') {
+    const state = readState();
+    state.running = false;
+    state.items = [];
+    state.jobs = [];
+    state.currentJob = null;
+    state.remoteJob = null;
+    state.done = 0;
+    state.total = 0;
+    state.lastError = reason;
+    writeState(state);
+    render();
+  }
+
   async function submitRemoteResult(state) {
     if (!state.remoteJob?.jobId) return;
 
@@ -403,6 +417,12 @@
       scheduleWorkerPoll(1000);
     } catch (error) {
       logError(`Worker failed to submit API job ${jobId}`, error);
+      if (/deleted|410/i.test(String(error?.message || ''))) {
+        requestLocalReset('Удалено через API');
+        heartbeat('ready').catch(() => {});
+        scheduleWorkerPoll(WORKER_POLL_MS);
+        return;
+      }
       const nextState = readState();
       nextState.lastError = error?.message || String(error);
       writeState(nextState);
@@ -417,15 +437,29 @@
     const state = readState();
     if (state.running || state.remoteJob) {
       if (state.remoteJob?.jobId) {
-        heartbeat('busy', state.remoteJob.jobId).catch((error) => logError('Worker heartbeat failed', error));
+        heartbeat('busy', state.remoteJob.jobId)
+          .then((payload) => {
+            if (payload?.command === 'delete' || payload?.worker?.status === 'deleted') {
+              requestLocalReset('Удалено через API');
+            }
+          })
+          .catch((error) => logError('Worker heartbeat failed', error));
       }
       return;
     }
 
     isWorkerPolling = true;
     try {
-      await heartbeat('ready');
+      const heartbeatPayload = await heartbeat('ready');
+      if (heartbeatPayload?.command === 'delete' || heartbeatPayload?.worker?.status === 'deleted') {
+        requestLocalReset('Удалено через API');
+        return;
+      }
       const payload = await apiRequest('GET', `/api/workers/${encodeURIComponent(getWorkerId())}/job`);
+      if (payload?.command === 'delete' || payload?.worker?.status === 'deleted') {
+        requestLocalReset('Удалено через API');
+        return;
+      }
       if (payload?.job) {
         startRemoteJob(payload.job);
       } else {
