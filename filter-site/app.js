@@ -1,11 +1,12 @@
 ﻿import http from 'node:http';
+import os from 'node:os';
 import { readFile, writeFile } from 'node:fs/promises';
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-const PORT = Number(globalThis.process?.env?.PORT || 4173);
-const MAX_PORT_ATTEMPTS = 10;
+const PORT = Number(globalThis.process?.env?.PORT || 3000);
+const HOST = globalThis.process?.env?.HOST || '0.0.0.0';
 // JSON-файлы с маршрутами и карточками могут быть довольно большими, поэтому
 // держим лимит заметно выше обычного размера пользовательского экспорта.
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -620,7 +621,8 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const rubPerMinute = rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
   const fastBoth = rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
   const midRange = rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
-  const midRangeMedians = median(midRange.map((row) => row.rent));
+  const midRangeRentMedian = median(midRange.map((row) => row.rent));
+  const midRangeTotalMedian = median(midRange.map((row) => row.total));
 
   const metrics = [
     ['Объектов', rows.length, 'с распознанной ценой'],
@@ -637,7 +639,8 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
     ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
     ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
-    ['Медиана 60-90 мин', midRange.length ? rub(midRangeMedians) : 'нет данных', 'вариантов: ' + midRange.length + ', по среднему времени до двоих'],
+    ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
+    ['Медиана итого 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', сумма за ' + periodLabel],
     ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
     ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
   ].map(([label, value, note]) => ({ label, value, note }));
@@ -2612,6 +2615,9 @@ const analyticsPage = String.raw`<!doctype html>
       display: grid;
       gap: 4px;
     }
+    .mobile-summary {
+      display: none;
+    }
     .fav-btn {
       display: inline-flex;
       align-items: center;
@@ -2777,10 +2783,12 @@ const analyticsPage = String.raw`<!doctype html>
       thead { display: none; }
       tbody { display: grid; gap: 10px; }
       tr {
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 16px;
-        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.09);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
         overflow: hidden;
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+        padding: 12px;
       }
       td {
         display: grid;
@@ -2788,6 +2796,7 @@ const analyticsPage = String.raw`<!doctype html>
         gap: 10px;
         align-items: start;
         padding: 10px 12px;
+        border: 0;
       }
       td::before {
         content: attr(data-label);
@@ -2803,23 +2812,88 @@ const analyticsPage = String.raw`<!doctype html>
         justify-self: end;
         text-align: right;
       }
-      td[data-label="Объект"] {
-        grid-template-columns: 1fr;
+      .listing-table td {
+        display: none;
+        padding: 0;
       }
-      td[data-label="Объект"]::before {
-        margin-bottom: 2px;
+      .listing-table td[data-label="Объект"] {
+        display: block;
       }
-      td[data-label="Объект"] > .cell-inner {
-        justify-self: stretch;
-        text-align: left;
+      .listing-table td[data-label="Объект"]::before {
+        display: none;
       }
-      .listing-cell {
+      .listing-table td[data-label="Объект"] > .cell-inner {
+        min-width: 0;
+      }
+      .listing-table .listing-cell {
         width: 100%;
-        gap: 8px;
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr) auto;
+        grid-template-areas:
+          "thumb main actions"
+          "summary summary summary";
+        gap: 10px;
+        align-items: start;
       }
-      .thumb {
-        width: 70px;
-        height: 52px;
+      .listing-table .thumb {
+        grid-area: thumb;
+        width: 72px;
+        height: 72px;
+      }
+      .listing-table .listing-copy {
+        grid-area: main;
+        gap: 6px;
+      }
+      .listing-table .row-actions {
+        grid-area: actions;
+        margin-left: 0;
+        flex-direction: row;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .listing-table .row-actions .fav-btn,
+      .listing-table .row-actions .issue-btn {
+        width: 34px;
+        height: 34px;
+      }
+      .listing-table .mobile-summary {
+        grid-area: summary;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 2px;
+        width: 100%;
+      }
+      .listing-table .mobile-stat {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+        flex: 1 1 calc(50% - 8px);
+        min-width: 132px;
+        padding: 10px 11px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.03);
+      }
+      .listing-table .mobile-stat span {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 850;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+      .listing-table .mobile-stat strong {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 900;
+        line-height: 1.25;
+        word-break: break-word;
+        white-space: normal;
+      }
+      .listing-table .mobile-summary .mobile-stat:first-child,
+      .listing-table .mobile-summary .mobile-stat:nth-child(2) {
+        background: rgba(124,199,168,0.08);
+        border-color: rgba(124,199,168,0.16);
       }
     }
   </style>
@@ -2951,6 +3025,9 @@ const analyticsPage = String.raw`<!doctype html>
           </div>
           <div class="fav-actions">
             <button id="downloadFavoritesBtn" class="small-btn" type="button">Скачать избранное JSON</button>
+            <button id="downloadProgressBtn" class="small-btn" type="button">Скачать прогресс JSON</button>
+            <button id="importProgressBtn" class="small-btn" type="button">Загрузить прогресс JSON</button>
+            <input id="progressImportInput" type="file" accept=".json,application/json" hidden>
             <span class="badge">Сохранено: <span id="favoritesCount" style="margin-left:6px;">0</span></span>
           </div>
         </div>
@@ -3017,6 +3094,9 @@ const analyticsPage = String.raw`<!doctype html>
       favoritesStatus: document.querySelector('#favoritesStatus'),
       favoritesCount: document.querySelector('#favoritesCount'),
       downloadFavoritesBtn: document.querySelector('#downloadFavoritesBtn'),
+      downloadProgressBtn: document.querySelector('#downloadProgressBtn'),
+      importProgressBtn: document.querySelector('#importProgressBtn'),
+      progressImportInput: document.querySelector('#progressImportInput'),
       commuteIssuesTable: document.querySelector('#commuteIssuesTable'),
       commuteIssuesPanel: document.querySelector('#commuteIssuesPanel'),
       commuteIssuesStatus: document.querySelector('#commuteIssuesStatus'),
@@ -3086,6 +3166,10 @@ const analyticsPage = String.raw`<!doctype html>
       } catch {
         // localStorage может быть недоступен в приватном режиме.
       }
+    }
+
+    function uniqueStrings(values) {
+      return [...new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean))];
     }
 
     function esc(value) {
@@ -3205,6 +3289,134 @@ const analyticsPage = String.raw`<!doctype html>
         row?.url ||
         [item.title, item.adress || item.address || item['адрес'], item.rent_per_month || item.price || row?.rent].filter(Boolean).join('|')
       ).trim();
+    }
+
+    function getCurrentRowKeys() {
+      return uniqueStrings(state.rows.map((row) => getFavoriteKey(row)));
+    }
+
+    function extractKeyFromImportedEntry(entry) {
+      if (typeof entry === 'string' || typeof entry === 'number') {
+        return String(entry).trim();
+      }
+
+      if (!entry || typeof entry !== 'object') return '';
+
+      const directKey = entry.key || entry.id || entry.url || entry.link || entry.href;
+      if (directKey) return String(directKey).trim();
+
+      return getFavoriteKey(entry);
+    }
+
+    function collectImportedKeys(source) {
+      if (!source) return [];
+      const entries = Array.isArray(source) ? source : [source];
+      return uniqueStrings(entries.flatMap((entry) => {
+        if (entry && typeof entry === 'object' && Array.isArray(entry.items)) {
+          return entry.items.map(extractKeyFromImportedEntry);
+        }
+        return extractKeyFromImportedEntry(entry) ? [extractKeyFromImportedEntry(entry)] : [];
+      }));
+    }
+
+    function readProgressPayload(payload) {
+      if (Array.isArray(payload)) {
+        payload = { items: payload };
+      }
+
+      if (!payload || typeof payload !== 'object') {
+        throw new Error('JSON прогресса должен быть объектом.');
+      }
+
+      const favoriteKeys = collectImportedKeys(payload.favoriteKeys || payload.favorites || payload.likedKeys || payload.liked || payload.favouriteKeys || payload.favourites);
+      const viewedKeys = collectImportedKeys(payload.viewedKeys || payload.viewed || payload.seenKeys || payload.seen || payload.watchedKeys || payload.watched);
+      const commuteIssueKeys = collectImportedKeys(payload.commuteIssueKeys || payload.commuteIssues || payload.issues || payload.errors || payload.problemKeys);
+
+      if (!favoriteKeys.length && !viewedKeys.length && !commuteIssueKeys.length && Array.isArray(payload.items)) {
+        for (const item of payload.items) {
+          const status = String(item?.status || item?.state || item?.kind || item?.tag || '').toLowerCase();
+          const key = extractKeyFromImportedEntry(item);
+          if (!key) continue;
+
+          if (/favorite|favourite|like|liked|love|fav/.test(status)) favoriteKeys.push(key);
+          else if (/view|seen|watch|opened/.test(status)) viewedKeys.push(key);
+          else if (/issue|error|problem|commute|warn/.test(status)) commuteIssueKeys.push(key);
+        }
+      }
+
+      return {
+        favoriteKeys: uniqueStrings(favoriteKeys),
+        viewedKeys: uniqueStrings(viewedKeys),
+        commuteIssueKeys: uniqueStrings(commuteIssueKeys),
+      };
+    }
+
+    function persistAnalyticsProgress(progress) {
+      state.favoriteKeys = uniqueStrings(progress.favoriteKeys);
+      state.viewedKeys = uniqueStrings(progress.viewedKeys);
+      state.commuteIssueKeys = uniqueStrings(progress.commuteIssueKeys);
+      saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+      saveStoredKeys(VIEWED_STORAGE_KEY, state.viewedKeys);
+      saveStoredKeys(COMMUTE_ISSUES_STORAGE_KEY, state.commuteIssueKeys);
+    }
+
+    function buildAnalyticsProgressSnapshot() {
+      const currentRowKeys = getCurrentRowKeys();
+      const viewedSet = new Set(state.viewedKeys);
+      const notViewedKeys = currentRowKeys.filter((key) => !viewedSet.has(key));
+
+      return {
+        format: 'analytics-progress',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        counts: {
+          favorite: state.favoriteKeys.length,
+          viewed: state.viewedKeys.length,
+          commuteIssues: state.commuteIssueKeys.length,
+          notViewed: notViewedKeys.length,
+        },
+        favoriteKeys: [...state.favoriteKeys],
+        viewedKeys: [...state.viewedKeys],
+        commuteIssueKeys: [...state.commuteIssueKeys],
+        notViewedKeys,
+      };
+    }
+
+    function downloadJsonFile(payload, filename) {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function refreshAnalyticsProgressUi() {
+      renderTables();
+      renderBuckets();
+      renderFavorites();
+      renderCommuteIssues();
+      if (state.openTableKey) {
+        const rows = state.tableRows[state.openTableKey] || [];
+        const columns = buildAnalyticsColumns(state.openTableKey);
+        renderTable(els.fullTable, rows, columns, state.tableHighlights[state.openTableKey] || 0, { getRowClass });
+      }
+    }
+
+    function importAnalyticsProgress(payload) {
+      const progress = readProgressPayload(payload);
+      persistAnalyticsProgress(progress);
+      refreshAnalyticsProgressUi();
+      setStatus(
+        'Прогресс импортирован: ' +
+          progress.favoriteKeys.length + ' понравившихся, ' +
+          progress.viewedKeys.length + ' просмотренных, ' +
+          progress.commuteIssueKeys.length + ' ошибок.',
+        'ok',
+      );
     }
 
     function encodeKey(key) {
@@ -3561,6 +3773,9 @@ const analyticsPage = String.raw`<!doctype html>
       const fastLimit = Number(els.fastLimit.value || 90);
       const fastBoth = state.rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
       const periodLabel = getPeriodLabel(state.rows);
+      const midRange = state.rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
+      const midRangeRentMedian = median(midRange.map((row) => row.rent));
+      const midRangeTotalMedian = median(midRange.map((row) => row.total));
       const values = [
         ['Объектов', state.rows.length, 'с распознанной ценой'],
         ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
@@ -3576,6 +3791,8 @@ const analyticsPage = String.raw`<!doctype html>
         ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
         ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
         ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+        ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
+        ['Медиана итого 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', сумма за ' + periodLabel],
         ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
         ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
       ];
@@ -3597,23 +3814,47 @@ const analyticsPage = String.raw`<!doctype html>
       els.insights.innerHTML = blocks.map((block) => '<article class="insight"><b>' + esc(block[0]) + '</b><div>' + block[1] + '</div></article>').join('');
     }
 
-    function listingCell(row) {
+    function listingCell(row, index) {
       const imageUrl = getImageUrl(row);
       const favoriteKey = getFavoriteKey(row);
       const favoriteActive = favoriteKey && state.favoriteKeys.includes(favoriteKey);
       const issueActive = favoriteKey && state.commuteIssueKeys.includes(favoriteKey);
+      const summaryItems = [
+        row.rent ? ['Аренда', rub(row.rent)] : null,
+        row.total ? ['За период', rub(row.total)] : null,
+        row.priceM2 ? ['₽ / м²', rub(row.priceM2)] : null,
+        row.startPayment ? ['Старт', rub(row.startPayment)] : null,
+        row.deposit ? ['Залог', rub(row.deposit)] : null,
+        row.commission ? ['Комиссия', rub(row.commission)] : null,
+        row.utilities ? ['ЖКУ', rub(row.utilities)] : null,
+        (Number.isFinite(row.olya) || Number.isFinite(row.nikita))
+          ? ['Дорога', [Number.isFinite(row.olya) ? 'Оля ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Никита ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
+          : null,
+      ].filter(Boolean);
       const title = row.url
         ? '<a class="title js-viewed-link" data-view-key="' + esc(encodeKey(favoriteKey)) + '" href="' + esc(row.url) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
         : '<span class="title">' + esc(row.title) + '</span>';
       const thumb = imageUrl
         ? '<div class="thumb"><img src="' + esc(imageUrl) + '" alt="' + esc(row.title) + '" loading="lazy" referrerpolicy="no-referrer"></div>'
         : '<div class="thumb">Фото</div>';
+      const grade = row.grade || '-';
+      const score = Number.isFinite(row.finalScore) ? row.finalScore : row.score;
       return '<div class="listing-cell">' +
         thumb +
         '<div class="listing-copy">' +
-          title +
-          (row.address ? '<div class="muted">' + esc(row.address) + '</div>' : '') +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">' +
+            '<div style="min-width:0;display:grid;gap:4px;">' +
+              '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                title +
+                '<span class="badge">' + esc(grade) + '</span>' +
+                (Number.isFinite(score) ? '<span class="badge">' + esc(score) + '/100</span>' : '') +
+              '</div>' +
+              (row.address ? '<div class="muted">' + esc(row.address) + '</div>' : '') +
+              (row.terms ? '<div class="muted">' + esc(row.terms) + '</div>' : '') +
+            '</div>' +
+          '</div>' +
         '</div>' +
+        '<div class="mobile-summary">' + summaryItems.map(([label, value]) => '<div class="mobile-stat"><span>' + esc(label) + '</span><strong>' + esc(value) + '</strong></div>').join('') + '</div>' +
         '<div class="row-actions">' +
           '<button class="fav-btn js-fav-toggle' + (favoriteActive ? ' active' : '') + '" type="button" data-favorite-key="' + esc(encodeKey(favoriteKey)) + '" title="' + (favoriteActive ? 'Убрать из понравившихся' : 'Добавить в понравившиеся') + '" aria-label="' + (favoriteActive ? 'Убрать из понравившихся' : 'Добавить в понравившиеся') + '">' + (favoriteActive ? '♥' : '♡') + '</button>' +
           '<button class="issue-btn js-issue-toggle' + (issueActive ? ' active' : '') + '" type="button" data-issue-key="' + esc(encodeKey(favoriteKey)) + '" title="' + (issueActive ? 'Убрать отметку о несовпадении времени' : 'Отметить, что время не совпало') + '" aria-label="' + (issueActive ? 'Убрать отметку о несовпадении времени' : 'Отметить, что время не совпало') + '">⚠</button>' +
@@ -3627,7 +3868,8 @@ const analyticsPage = String.raw`<!doctype html>
         return;
       }
       const visibleRows = options.limit ? rows.slice(0, options.limit) : rows;
-      target.innerHTML = '<table><thead><tr>' + columns.map((col) => '<th>' + esc(col.label) + '</th>').join('') + '</tr></thead><tbody>' +
+      const tableClass = columns.some((col) => col.label === 'Объект') ? 'analytics-table listing-table' : 'analytics-table';
+      target.innerHTML = '<table class="' + tableClass + '" data-table-key="' + esc(options.tableKey || '') + '"><thead><tr>' + columns.map((col) => '<th>' + esc(col.label) + '</th>').join('') + '</tr></thead><tbody>' +
         visibleRows.map((row, index) => {
           const isTop = index < highlightCount;
           const extraClass = options.getRowClass ? String(options.getRowClass(row, index) || '').trim() : '';
@@ -3904,6 +4146,19 @@ const analyticsPage = String.raw`<!doctype html>
       setStatus('Избранное скачано: ' + payload.length + ' вариантов.', 'ok');
     }
 
+    function downloadProgressJson() {
+      const payload = buildAnalyticsProgressSnapshot();
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      downloadJsonFile(payload, 'analytics-progress-' + stamp + '.json');
+      setStatus(
+        'Прогресс скачан: ' +
+          payload.counts.favorite + ' понравившихся, ' +
+          payload.counts.viewed + ' просмотренных, ' +
+          payload.counts.commuteIssues + ' ошибок.',
+        'ok',
+      );
+    }
+
     function downloadCommuteIssuesJson() {
       const issueRows = getCommuteIssueRows();
       if (!issueRows.length) {
@@ -3927,6 +4182,21 @@ const analyticsPage = String.raw`<!doctype html>
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus('Список расхождений скачан: ' + payload.length + ' вариантов.', 'ok');
+    }
+
+    async function handleProgressImport() {
+      const file = els.progressImportInput.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        importAnalyticsProgress(payload);
+      } catch (error) {
+        setStatus('Не удалось загрузить прогресс: ' + (error?.message || String(error)), 'warn');
+      } finally {
+        els.progressImportInput.value = '';
+      }
     }
 
     function setFullViewVisible(isVisible) {
@@ -4004,6 +4274,14 @@ const analyticsPage = String.raw`<!doctype html>
       prepareRows();
       setStage('Подсчёт аналитики', 'info');
       renderAll();
+    }
+
+    const ANALYZE_BUTTON_TEXT = 'Построить';
+
+    function setAnalyzeBusy(isBusy) {
+      els.analyzeBtn.disabled = isBusy;
+      els.analyzeBtn.textContent = isBusy ? 'Строю...' : ANALYZE_BUTTON_TEXT;
+      els.analyzeBtn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
     }
 
     async function readJsonResponse(response, fallbackMessage) {
@@ -4305,18 +4583,26 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     async function handleAnalyze() {
+      setAnalyzeBusy(true);
       try {
         if (!els.jsonInput.value.trim()) {
           setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
           return;
         }
+        setStage('Показываю результаты', 'info');
+        setStatus('Идёт загрузка и обработка JSON, подожди немного...', 'info');
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         await loadText(els.jsonInput.value);
+        els.metrics.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (error) {
         state.items = [];
         state.rows = [];
         state.analyticsView = null;
         renderAll();
         setStatus('Ошибка JSON: ' + (error?.message || String(error)), 'warn');
+      } finally {
+        setAnalyzeBusy(false);
       }
     }
 
@@ -4330,6 +4616,9 @@ const analyticsPage = String.raw`<!doctype html>
     els.analyzeBtn.addEventListener('click', () => { void handleAnalyze(); });
     els.imageButton.addEventListener('click', () => { void loadPreviewImages(); });
     els.downloadFavoritesBtn.addEventListener('click', downloadFavoritesJson);
+    els.downloadProgressBtn.addEventListener('click', downloadProgressJson);
+    els.importProgressBtn.addEventListener('click', () => els.progressImportInput.click());
+    els.progressImportInput.addEventListener('change', () => { void handleProgressImport(); });
     els.downloadCommuteIssuesBtn.addEventListener('click', downloadCommuteIssuesJson);
     els.fastLimit.addEventListener('input', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
     els.olyaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
@@ -4625,8 +4914,8 @@ const costsPage = String.raw`<!doctype html>
       <label class="field">
         Сортировка
         <select id="sortMode">
+          <option value="total-asc" selected>Итог: дешевле</option>
           <option value="total-desc">Итог: дороже</option>
-          <option value="total-asc">Итог: дешевле</option>
           <option value="rent-asc">Аренда: дешевле</option>
           <option value="deposit-desc">Залог: больше</option>
         </select>
@@ -5629,24 +5918,42 @@ function createServer() {
   });
 }
 
-function listenWithFallback(startPort, attemptsLeft = MAX_PORT_ATTEMPTS) {
+function getLanIPv4Addresses() {
+  const results = [];
+  const interfaces = os.networkInterfaces();
+  for (const infos of Object.values(interfaces)) {
+    for (const info of infos || []) {
+      if (!info || info.family !== 'IPv4' || info.internal) continue;
+      results.push(info.address);
+    }
+  }
+  return [...new Set(results)];
+}
+
+function listen() {
   const server = createServer();
 
   server.once('error', (error) => {
-    if (error?.code === 'EADDRINUSE' && attemptsLeft > 0) {
-      const nextPort = startPort + 1;
-      console.warn(`Port ${startPort} занят, пробую ${nextPort}...`);
-      listenWithFallback(nextPort, attemptsLeft - 1);
+    if (error?.code === 'EADDRINUSE') {
+      console.error(`Порт ${PORT} уже занят. Освободи его и перезапусти сервер.`);
+      process.exitCode = 1;
       return;
     }
 
     throw error;
   });
 
-  server.listen(startPort, () => {
-    console.log(`Avito Transit site: http://localhost:${startPort}`);
+  server.listen(PORT, HOST, () => {
+    const lanHosts = getLanIPv4Addresses();
+    console.log(`Avito Transit site: http://localhost:${PORT}`);
+    console.log(`Avito Transit site: http://${HOST}:${PORT}`);
+    for (const address of lanHosts) {
+      console.log(`Avito Transit site: http://${address}:${PORT}`);
+    }
   });
 }
 
-listenWithFallback(PORT);
+listen();
+
+
 
