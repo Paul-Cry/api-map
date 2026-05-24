@@ -9,6 +9,7 @@ const MAX_PORT_ATTEMPTS = 10;
 // JSON-файлы с маршрутами и карточками могут быть довольно большими, поэтому
 // держим лимит заметно выше обычного размера пользовательского экспорта.
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
+const IMAGE_FETCH_DELAY_MS = 5000;
 const ANALYTICS_DATA_FILE = new URL('./analytics-data.json', import.meta.url);
 const ADMIN_KEY_FILE = new URL('./.analytics-admin-key', import.meta.url);
 
@@ -381,20 +382,50 @@ function getRent(item) {
 
 function getMonths(item) {
   const months = Number(item?.months);
-  return Number.isFinite(months) && months > 0 ? months : 3;
+  if (Number.isFinite(months) && months > 0) return months;
+
+  const source = [item?.dop, item?.description].map((value) => String(value ?? '').toLowerCase()).join(' ');
+  if (/от\s+года|год(а|у)?/.test(source)) return 12;
+  if (/полгода|6\s*мес/.test(source)) return 6;
+  if (/2\s*года/.test(source)) return 24;
+
+  return 3;
 }
 
 function getTotal(item, rent, months) {
   const total = Number(item?.total_for_period);
   if (Number.isFinite(total) && total > 0) return total;
-  const partsTotal = Number(item?.rent_for_period || 0) + Number(item?.commission || 0) + Number(item?.deposit || 0);
+  const commission = getCommission(item);
+  const deposit = getDeposit(item) || getDepositFromText(item, rent);
+  const partsTotal = rent * months + commission + deposit;
   if (Number.isFinite(partsTotal) && partsTotal > 0) return partsTotal;
   return rent * months;
+}
+
+function getPaymentSourceText(item) {
+  return [item?.dop, item?.description]
+    .map((value) => String(value ?? ''))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function getCommission(item) {
   const commission = Number(item?.commission);
   if (Number.isFinite(commission) && commission >= 0) return commission;
+
+  const source = getPaymentSourceText(item);
+  if (/без\s+комисс/i.test(source)) return 0;
+
+  const percentMatch = source.match(/комисс\w*[^0-9]{0,24}(\d{1,3})\s*%/i);
+  if (percentMatch) {
+    const percent = Number(percentMatch[1]);
+    const rent = getRent(item);
+    if (Number.isFinite(percent) && percent > 0 && rent > 0) {
+      return rent * percent / 100;
+    }
+  }
+
   const percent = Number(item?.commission_percent);
   const rent = getRent(item);
   if (Number.isFinite(percent) && percent > 0 && rent > 0) return rent * percent / 100;
@@ -404,6 +435,22 @@ function getCommission(item) {
 function getDeposit(item) {
   const deposit = Number(item?.deposit);
   return Number.isFinite(deposit) && deposit > 0 ? deposit : 0;
+}
+
+function getDepositFromText(item, monthlyPrice) {
+  const source = getPaymentSourceText(item);
+  if (/без\s+залог/i.test(source)) return 0;
+
+  const depositMatch = source.match(/(?:залог|депозит)[^0-9₽р]{0,40}(\d[\d\s.]*)\s*(?:₽|руб|р\.?)/i);
+  if (depositMatch) {
+    const parsed = parseMoney(depositMatch[0]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  const oneMonthMatch = source.match(/(?:залог|депозит)[^.]{0,80}(?:месяц|мес|размере месячной|один)/i);
+  if (oneMonthMatch && monthlyPrice > 0) return monthlyPrice;
+
+  return 0;
 }
 
 function moveInCategory(startPayment, rent) {
@@ -487,7 +534,7 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     const maxCommute = Math.max(olya, nikita);
     const diffTime = Math.abs(olya - nikita);
     const commission = getCommission(item);
-    const deposit = getDeposit(item);
+    const deposit = getDeposit(item) || getDepositFromText(item, rent);
     const startPayment = rent + commission + deposit;
     const priceM2 = area ? rent / area : 0;
     const dailyRent = rent / 30;
@@ -572,6 +619,8 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const diffTimes = rows.map((row) => row.diffTime);
   const rubPerMinute = rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
   const fastBoth = rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
+  const midRange = rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
+  const midRangeMedians = median(midRange.map((row) => row.rent));
 
   const metrics = [
     ['Объектов', rows.length, 'с распознанной ценой'],
@@ -588,16 +637,17 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
     ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
     ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+    ['Медиана 60-90 мин', midRange.length ? rub(midRangeMedians) : 'нет данных', 'вариантов: ' + midRange.length + ', по среднему времени до двоих'],
     ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
     ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
   ].map(([label, value, note]) => ({ label, value, note }));
 
-  const cheapest = rows.slice().sort((a, b) => a.rent - b.rent)[0];
+  const cheapest = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent)[0];
   const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
   const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
   const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
   const insights = [
-    ['Самый дешёвый', cheapest ? rub(cheapest.rent) + '<br>' + esc(cheapest.title) : 'нет данных'],
+    ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
     ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
     ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
     ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
@@ -612,7 +662,7 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     { label: 'До Никиты' },
   ];
 
-  const cheap = rows.slice().sort((a, b) => a.rent - b.rent);
+  const cheap = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
   const expensiveRows = rows.slice().sort((a, b) => b.rent - a.rent);
   const olya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
   const nikita = rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
@@ -787,21 +837,29 @@ async function fetchPreviewImage(url) {
   return extractImageFromHtml(html, response.url || url);
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function handlePreviewImages(req, res) {
   const body = await readBody(req);
   const payload = JSON.parse(body || '{}');
   const items = Array.isArray(payload.items) ? payload.items : [];
   const limit = Math.max(1, Math.min(Number(payload.limit || 40), 80));
+  const delayMs = Math.max(0, Math.min(Number(payload.delayMs || IMAGE_FETCH_DELAY_MS), 30000));
   const urls = [...new Set(items.map(getListingUrl).filter(Boolean))].slice(0, limit);
   const results = {};
 
-  await Promise.all(urls.map(async (url) => {
+  for (const [index, url] of urls.entries()) {
     try {
       results[url] = await fetchPreviewImage(url);
     } catch {
       results[url] = '';
     }
-  }));
+    if (index < urls.length - 1 && delayMs > 0) {
+      await delay(delayMs);
+    }
+  }
 
   jsonResponse(res, 200, { results });
 }
@@ -2418,7 +2476,7 @@ const analyticsPage = String.raw`<!doctype html>
     }
     .action-btn.primary { background: var(--accent); color: #07120e; border-color: var(--accent); }
     .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .toolbar { display: grid; grid-template-columns: 1fr 1fr 170px 170px auto; gap: 12px; align-items: end; padding: 14px; margin-bottom: 14px; }
+    .toolbar { display: grid; grid-template-columns: 1fr 1fr 170px 170px auto auto; gap: 12px; align-items: end; padding: 14px; margin-bottom: 14px; }
     .field { display: grid; gap: 6px; color: #d8dfeb; font-size: 13px; font-weight: 750; }
     input, select, textarea {
       width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
@@ -2469,8 +2527,112 @@ const analyticsPage = String.raw`<!doctype html>
     .muted { color: var(--muted); font-size: 12px; line-height: 1.4; }
     .title { color: var(--text); text-decoration: none; font-weight: 800; }
     .title:hover { color: var(--accent); text-decoration: underline; }
+    .listing-cell {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .thumb {
+      flex: 0 0 auto;
+      width: 82px;
+      height: 60px;
+      border-radius: 11px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+    .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .listing-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .fav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      margin-left: auto;
+      border: 1px solid rgba(255, 133, 133, 0.22);
+      border-radius: 10px;
+      background: rgba(255, 133, 133, 0.08);
+      color: #ffc7c7;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .fav-btn.active {
+      background: rgba(255, 133, 133, 0.18);
+      border-color: rgba(255, 133, 133, 0.42);
+      color: #ff8d8d;
+    }
+    .fav-btn:hover {
+      background: rgba(255, 133, 133, 0.14);
+    }
+    .row-actions {
+      margin-left: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    .issue-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(242, 195, 107, 0.24);
+      border-radius: 10px;
+      background: rgba(242, 195, 107, 0.09);
+      color: #ffd36e;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .issue-btn.active {
+      background: rgba(242, 195, 107, 0.2);
+      border-color: rgba(242, 195, 107, 0.5);
+      color: #ffe08f;
+    }
+    .issue-btn:hover {
+      background: rgba(242, 195, 107, 0.15);
+    }
+    .fav-row td {
+      background: rgba(255, 133, 133, 0.04);
+    }
+    .fav-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .fav-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
     .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; background: rgba(137,167,255,0.14); color: #dfe6ff; font-size: 12px; font-weight: 800; }
-    .top-row td { background: rgba(124, 199, 168, 0.045); }
+    .viewed-row td { background: rgba(255, 255, 255, 0.02); opacity: 0.76; }
+    .fresh-row td { background: rgba(124, 199, 168, 0.045); }
+    .favorite-row td { background: rgba(255, 133, 133, 0.07); }
+    .issue-row td { background: rgba(242, 195, 107, 0.06); }
+    .top-row td { background: rgba(124, 199, 168, 0.09); }
     .top-tag {
       display: inline-flex;
       align-items: center;
@@ -2548,6 +2710,7 @@ const analyticsPage = String.raw`<!doctype html>
       <label class="field">Поле Оли <select id="olyaKey"></select></label>
       <label class="field">Поле Никиты <select id="nikitaKey"></select></label>
       <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
+      <button id="imageButton" class="action-btn" type="button">Фото объявлений</button>
     </section>
 
     <section class="panel json-box">
@@ -2579,7 +2742,7 @@ const analyticsPage = String.raw`<!doctype html>
 
     <section class="grid analytics-section">
       <section class="panel">
-        <div class="panel-head"><div class="panel-title">Самые дешёвые</div><div class="status">по аренде в месяц</div></div>
+        <div class="panel-head"><div class="panel-title">Самые дешёвые</div><div class="status">по стоимости за 3 месяца</div></div>
         <div class="panel-body" id="cheapTable"></div>
       </section>
       <section class="panel">
@@ -2639,6 +2802,38 @@ const analyticsPage = String.raw`<!doctype html>
       </section>
     </section>
 
+    <section class="panel analytics-section" id="favoritesPanel">
+      <div class="panel-head">
+        <div class="fav-panel-head">
+          <div>
+            <div class="panel-title">Понравившиеся</div>
+            <div id="favoritesStatus" class="status">Избранные варианты сохраняются в браузере</div>
+          </div>
+          <div class="fav-actions">
+            <button id="downloadFavoritesBtn" class="small-btn" type="button">Скачать избранное JSON</button>
+            <span class="badge">Сохранено: <span id="favoritesCount" style="margin-left:6px;">0</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="panel-body" id="favoriteTable"></div>
+    </section>
+
+    <section class="panel analytics-section" id="commuteIssuesPanel">
+      <div class="panel-head">
+        <div class="fav-panel-head">
+          <div>
+            <div class="panel-title">Проверить время в пути</div>
+            <div id="commuteIssuesStatus" class="status">Отмечай объекты, где указанное время не совпало с картами</div>
+          </div>
+          <div class="fav-actions">
+            <button id="downloadCommuteIssuesBtn" class="small-btn" type="button">Скачать список JSON</button>
+            <span class="badge">Сохранено: <span id="commuteIssuesCount" style="margin-left:6px;">0</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="panel-body" id="commuteIssuesTable"></div>
+    </section>
+
     <section class="panel analytics-section">
       <div class="panel-head"><div class="panel-title">Что учитывается в анализе</div><div class="status">методика</div></div>
       <div class="panel-body method">
@@ -2660,6 +2855,7 @@ const analyticsPage = String.raw`<!doctype html>
       nikitaKey: document.querySelector('#nikitaKey'),
       stage: document.querySelector('#stage'),
       status: document.querySelector('#status'),
+      imageButton: document.querySelector('#imageButton'),
       metrics: document.querySelector('#metrics'),
       insights: document.querySelector('#insights'),
       cheapTable: document.querySelector('#cheapTable'),
@@ -2673,6 +2869,16 @@ const analyticsPage = String.raw`<!doctype html>
       startTable: document.querySelector('#startTable'),
       minuteTable: document.querySelector('#minuteTable'),
       categoryTable: document.querySelector('#categoryTable'),
+      favoriteTable: document.querySelector('#favoriteTable'),
+      favoritesPanel: document.querySelector('#favoritesPanel'),
+      favoritesStatus: document.querySelector('#favoritesStatus'),
+      favoritesCount: document.querySelector('#favoritesCount'),
+      downloadFavoritesBtn: document.querySelector('#downloadFavoritesBtn'),
+      commuteIssuesTable: document.querySelector('#commuteIssuesTable'),
+      commuteIssuesPanel: document.querySelector('#commuteIssuesPanel'),
+      commuteIssuesStatus: document.querySelector('#commuteIssuesStatus'),
+      commuteIssuesCount: document.querySelector('#commuteIssuesCount'),
+      downloadCommuteIssuesBtn: document.querySelector('#downloadCommuteIssuesBtn'),
       olyaAvg: document.querySelector('#olyaAvg'),
       nikitaAvg: document.querySelector('#nikitaAvg'),
       balancedAvg: document.querySelector('#balancedAvg'),
@@ -2688,6 +2894,9 @@ const analyticsPage = String.raw`<!doctype html>
     };
 
     const PREVIEW_LIMIT = 15;
+    const FAVORITES_STORAGE_KEY = 'analytics-favorites-v1';
+    const VIEWED_STORAGE_KEY = 'analytics-viewed-v1';
+    const COMMUTE_ISSUES_STORAGE_KEY = 'analytics-commute-issues-v1';
 
     const tableTitles = {
       cheap: 'Все самые дешёвые варианты',
@@ -2701,7 +2910,39 @@ const analyticsPage = String.raw`<!doctype html>
       minute: 'Все варианты по ₽ за минуту пути',
     };
 
-    const state = { items: [], rows: [], timeKeys: [], tableRows: {}, tableColumns: {}, tableHighlights: {}, analyticsView: null };
+    const state = {
+      items: [],
+      rows: [],
+      timeKeys: [],
+      tableRows: {},
+      tableColumns: {},
+      tableHighlights: {},
+      analyticsView: null,
+      openTableKey: null,
+      imageCache: new Map(),
+      imageLoading: false,
+      favoriteKeys: loadStoredKeys(FAVORITES_STORAGE_KEY),
+      viewedKeys: loadStoredKeys(VIEWED_STORAGE_KEY),
+      commuteIssueKeys: loadStoredKeys(COMMUTE_ISSUES_STORAGE_KEY),
+    };
+
+    function loadStoredKeys(storageKey) {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.map((value) => String(value)).filter(Boolean) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveStoredKeys(storageKey, keys) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(keys));
+      } catch {
+        // localStorage может быть недоступен в приватном режиме.
+      }
+    }
 
     function esc(value) {
       return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -2798,6 +3039,143 @@ const analyticsPage = String.raw`<!doctype html>
 
     function getUrl(item) {
       return String(item?.url ?? item?.link ?? item?.href ?? '');
+    }
+
+    function getFavoriteKey(row) {
+      const item = row?.item || row;
+      if (!item || typeof item !== 'object') return '';
+      return String(
+        item.url ||
+        item.URL ||
+        item.link ||
+        item.href ||
+        row?.url ||
+        [item.title, item.adress || item.address || item['адрес'], item.rent_per_month || item.price || row?.rent].filter(Boolean).join('|')
+      ).trim();
+    }
+
+    function encodeKey(key) {
+      return encodeURIComponent(String(key ?? ''));
+    }
+
+    function decodeKey(key) {
+      try {
+        return decodeURIComponent(String(key ?? ''));
+      } catch {
+        return String(key ?? '');
+      }
+    }
+
+    function isFavoriteRow(row) {
+      const key = getFavoriteKey(row);
+      return key ? state.favoriteKeys.includes(key) : false;
+    }
+
+    function isViewedRow(row) {
+      const key = getFavoriteKey(row);
+      return key ? state.viewedKeys.includes(key) : false;
+    }
+
+    function isCommuteIssueRow(row) {
+      const key = getFavoriteKey(row);
+      return key ? state.commuteIssueKeys.includes(key) : false;
+    }
+
+    function markViewedRow(row) {
+      const key = getFavoriteKey(row);
+      if (!key || state.viewedKeys.includes(key)) return;
+      state.viewedKeys = [...state.viewedKeys, key];
+      saveStoredKeys(VIEWED_STORAGE_KEY, state.viewedKeys);
+    }
+
+    function toggleFavoriteRow(row) {
+      const key = getFavoriteKey(row);
+      if (!key) return;
+      if (state.favoriteKeys.includes(key)) {
+        state.favoriteKeys = state.favoriteKeys.filter((value) => value !== key);
+      } else {
+        state.favoriteKeys = [...state.favoriteKeys, key];
+      }
+      saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+      renderTables();
+      renderBuckets();
+      if (state.openTableKey) {
+        const rows = state.tableRows[state.openTableKey] || [];
+        const columns = buildAnalyticsColumns(state.openTableKey);
+        renderTable(els.fullTable, rows, columns, state.tableHighlights[state.openTableKey] || 0, { getRowClass });
+      }
+    }
+
+    function toggleCommuteIssueRow(row) {
+      const key = getFavoriteKey(row);
+      if (!key) return;
+      if (state.commuteIssueKeys.includes(key)) {
+        state.commuteIssueKeys = state.commuteIssueKeys.filter((value) => value !== key);
+      } else {
+        state.commuteIssueKeys = [...state.commuteIssueKeys, key];
+      }
+      saveStoredKeys(COMMUTE_ISSUES_STORAGE_KEY, state.commuteIssueKeys);
+      renderTables();
+      renderBuckets();
+      renderFavorites();
+      renderCommuteIssues();
+      if (state.openTableKey) {
+        const rows = state.tableRows[state.openTableKey] || [];
+        const columns = buildAnalyticsColumns(state.openTableKey);
+        renderTable(els.fullTable, rows, columns, state.tableHighlights[state.openTableKey] || 0, { getRowClass });
+      }
+    }
+
+    function getListingUrl(item) {
+      const value = item?.url || item?.URL || item?.link || item?.href || item?.avitoUrl || '';
+      if (typeof value !== 'string') return '';
+      if (value.startsWith('//')) return 'https:' + value;
+      if (value.startsWith('/')) return 'https://www.avito.ru' + value;
+      return value;
+    }
+
+    function getImageCandidate(value) {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const candidate = getImageCandidate(entry);
+          if (candidate) return candidate;
+        }
+      }
+      if (typeof value === 'object') {
+        return value.url || value.src || value.href || value.imageUrl || value.preview || '';
+      }
+      return '';
+    }
+
+    function getImageUrl(row) {
+      const item = row?.item || row;
+      if (!item || typeof item !== 'object') return '';
+
+      const directKeys = ['image', 'imageUrl', 'img', 'photo', 'photoUrl', 'preview', 'thumbnail', 'cover'];
+      const arrayKeys = ['images', 'imageUrls', 'photos', 'photoUrls', 'pictures'];
+
+      for (const key of directKeys) {
+        const candidate = getImageCandidate(item[key]);
+        if (candidate) return candidate;
+      }
+
+      for (const key of arrayKeys) {
+        const candidate = getImageCandidate(item[key]);
+        if (candidate) return candidate;
+      }
+
+      const link = getListingUrl(item);
+      return link ? state.imageCache.get(link) || '' : '';
+    }
+
+    function getRowClass(row) {
+      const classes = [];
+      if (isFavoriteRow(row)) classes.push('favorite-row');
+      if (isCommuteIssueRow(row)) classes.push('issue-row');
+      classes.push(isViewedRow(row) ? 'viewed-row' : 'fresh-row');
+      return classes.join(' ');
     }
 
     function getRent(item) {
@@ -3053,12 +3431,12 @@ const analyticsPage = String.raw`<!doctype html>
 
     function renderInsights() {
       const rows = state.rows;
-      const cheapest = rows.slice().sort((a, b) => a.rent - b.rent)[0];
+      const cheapest = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent)[0];
       const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
       const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
       const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
       const blocks = [
-        ['Самый дешёвый', cheapest ? rub(cheapest.rent) + '<br>' + esc(cheapest.title) : 'нет данных'],
+        ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
         ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
         ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
         ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
@@ -3067,10 +3445,27 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function listingCell(row) {
+      const imageUrl = getImageUrl(row);
+      const favoriteKey = getFavoriteKey(row);
+      const favoriteActive = favoriteKey && state.favoriteKeys.includes(favoriteKey);
+      const issueActive = favoriteKey && state.commuteIssueKeys.includes(favoriteKey);
       const title = row.url
-        ? '<a class="title" href="' + esc(row.url) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
+        ? '<a class="title js-viewed-link" data-view-key="' + esc(encodeKey(favoriteKey)) + '" href="' + esc(row.url) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
         : '<span class="title">' + esc(row.title) + '</span>';
-      return title + (row.address ? '<div class="muted">' + esc(row.address) + '</div>' : '');
+      const thumb = imageUrl
+        ? '<div class="thumb"><img src="' + esc(imageUrl) + '" alt="' + esc(row.title) + '" loading="lazy" referrerpolicy="no-referrer"></div>'
+        : '<div class="thumb">Фото</div>';
+      return '<div class="listing-cell">' +
+        thumb +
+        '<div class="listing-copy">' +
+          title +
+          (row.address ? '<div class="muted">' + esc(row.address) + '</div>' : '') +
+        '</div>' +
+        '<div class="row-actions">' +
+          '<button class="fav-btn js-fav-toggle' + (favoriteActive ? ' active' : '') + '" type="button" data-favorite-key="' + esc(encodeKey(favoriteKey)) + '" title="' + (favoriteActive ? 'Убрать из понравившихся' : 'Добавить в понравившиеся') + '" aria-label="' + (favoriteActive ? 'Убрать из понравившихся' : 'Добавить в понравившиеся') + '">' + (favoriteActive ? '♥' : '♡') + '</button>' +
+          '<button class="issue-btn js-issue-toggle' + (issueActive ? ' active' : '') + '" type="button" data-issue-key="' + esc(encodeKey(favoriteKey)) + '" title="' + (issueActive ? 'Убрать отметку о несовпадении времени' : 'Отметить, что время не совпало') + '" aria-label="' + (issueActive ? 'Убрать отметку о несовпадении времени' : 'Отметить, что время не совпало') + '">⚠</button>' +
+        '</div>' +
+      '</div>';
     }
 
     function renderTable(target, rows, columns, highlightCount = 0, options = {}) {
@@ -3082,7 +3477,9 @@ const analyticsPage = String.raw`<!doctype html>
       target.innerHTML = '<table><thead><tr>' + columns.map((col) => '<th>' + esc(col.label) + '</th>').join('') + '</tr></thead><tbody>' +
         visibleRows.map((row, index) => {
           const isTop = index < highlightCount;
-          return '<tr' + (isTop ? ' class="top-row"' : '') + '>' + columns.map((col, columnIndex) => {
+          const extraClass = options.getRowClass ? String(options.getRowClass(row, index) || '').trim() : '';
+          const rowClass = [isTop ? 'top-row' : '', extraClass].filter(Boolean).join(' ');
+          return '<tr' + (rowClass ? ' class="' + esc(rowClass) + '"' : '') + '>' + columns.map((col, columnIndex) => {
             const tag = isTop && columnIndex === 0 ? '<span class="top-tag">Топ-' + (index + 1) + '</span>' : '';
             return '<td>' + tag + col.render(row, index) + '</td>';
           }).join('') + '</tr>';
@@ -3103,7 +3500,7 @@ const analyticsPage = String.raw`<!doctype html>
         { label: 'До Оли', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
         { label: 'До Никиты', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
       ];
-      const cheap = state.rows.slice().sort((a, b) => a.rent - b.rent);
+      const cheap = state.rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
       const olya = state.rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
       const nikita = state.rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
@@ -3208,6 +3605,178 @@ const analyticsPage = String.raw`<!doctype html>
       ]);
     }
 
+    function getRowsWithoutImages() {
+      return state.rows.filter((row) => {
+        const item = row?.item || row;
+        const link = getListingUrl(item);
+        return link && !getImageUrl(row);
+      });
+    }
+
+    function updateImageButtonState() {
+      if (!els.imageButton) return;
+      els.imageButton.disabled = !state.rows.length || state.imageLoading;
+    }
+
+    async function loadPreviewImages() {
+      const missingRows = getRowsWithoutImages();
+      if (!missingRows.length) {
+        setStatus('Фото уже есть в данных или ссылки на объявления не найдены.', 'ok');
+        return;
+      }
+
+      state.imageLoading = true;
+      updateImageButtonState();
+      setStatus('Подгружаю фото по одному, пауза 5 секунд между запросами...', 'warn');
+
+      const items = missingRows.slice(0, 40).map((row) => row.item || row);
+
+      try {
+        const response = await fetch('/api/preview-images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items,
+            limit: items.length,
+            delayMs: 5000,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось получить фото.');
+
+        let found = 0;
+        Object.entries(data.results || {}).forEach(([url, imageUrl]) => {
+          if (imageUrl) {
+            state.imageCache.set(url, imageUrl);
+            found += 1;
+          }
+        });
+
+        renderTables();
+        renderBuckets();
+        setStatus('Фото подгружены: ' + found + ' из ' + items.length + '.', found ? 'ok' : 'warn');
+      } catch (error) {
+        setStatus('Фото не удалось получить: ' + (error?.message || String(error)), 'warn');
+      } finally {
+        state.imageLoading = false;
+        updateImageButtonState();
+      }
+    }
+
+    function getFavoriteRows() {
+      const rowsByKey = new Map(state.rows.map((row) => [getFavoriteKey(row), row]));
+      return state.favoriteKeys.map((key) => rowsByKey.get(key)).filter(Boolean);
+    }
+
+    function getCommuteIssueRows() {
+      const rowsByKey = new Map(state.rows.map((row) => [getFavoriteKey(row), row]));
+      return state.commuteIssueKeys.map((key) => rowsByKey.get(key)).filter(Boolean);
+    }
+
+    function renderFavorites() {
+      if (!els.favoriteTable || !els.favoritesCount) return;
+
+      const favoriteRows = getFavoriteRows();
+      els.favoritesCount.textContent = String(state.favoriteKeys.length);
+
+      if (!favoriteRows.length) {
+        els.favoriteTable.innerHTML = '<div class="empty">' + (state.favoriteKeys.length
+          ? 'В избранном есть сохранённые варианты, но в текущем JSON они не найдены.'
+          : 'Пока нет понравившихся вариантов. Нажми на сердечко в таблице.') + '</div>';
+        if (els.favoritesStatus) {
+          els.favoritesStatus.textContent = state.favoriteKeys.length
+            ? 'Сохранено ' + state.favoriteKeys.length + ', в текущем JSON не найдено'
+            : 'Избранных нет';
+        }
+        return;
+      }
+
+      if (els.favoritesStatus) {
+        els.favoritesStatus.textContent = 'Показано ' + favoriteRows.length + ' из ' + state.favoriteKeys.length + ' сохранённых вариантов';
+      }
+
+      renderTable(els.favoriteTable, favoriteRows, buildAnalyticsColumns('cheap'), 0, {
+        limit: favoriteRows.length,
+        tableKey: 'favorites',
+        getRowClass,
+      });
+    }
+
+    function renderCommuteIssues() {
+      if (!els.commuteIssuesTable || !els.commuteIssuesCount) return;
+
+      const issueRows = getCommuteIssueRows();
+      els.commuteIssuesCount.textContent = String(state.commuteIssueKeys.length);
+
+      if (!issueRows.length) {
+        els.commuteIssuesTable.innerHTML = '<div class="empty">' + (state.commuteIssueKeys.length
+          ? 'Отмеченные варианты есть, но в текущем JSON они не найдены.'
+          : 'Пока нет отмеченных расхождений. Нажми на значок ⚠ в таблице.') + '</div>';
+        if (els.commuteIssuesStatus) {
+          els.commuteIssuesStatus.textContent = state.commuteIssueKeys.length
+            ? 'Сохранено ' + state.commuteIssueKeys.length + ', в текущем JSON не найдено'
+            : 'Отмеченных расхождений нет';
+        }
+        return;
+      }
+
+      if (els.commuteIssuesStatus) {
+        els.commuteIssuesStatus.textContent = 'Показано ' + issueRows.length + ' из ' + state.commuteIssueKeys.length + ' отмеченных вариантов';
+      }
+
+      renderTable(els.commuteIssuesTable, issueRows, buildAnalyticsColumns('cheap'), 0, {
+        limit: issueRows.length,
+        tableKey: 'commute-issues',
+        getRowClass,
+      });
+    }
+
+    function downloadFavoritesJson() {
+      const favoriteRows = getFavoriteRows();
+      if (!favoriteRows.length) {
+        setStatus('Сначала добавь варианты в понравившиеся.', 'warn');
+        return;
+      }
+
+      const payload = favoriteRows.map((row) => ({ ...row }));
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      anchor.href = url;
+      anchor.download = 'favorites-' + stamp + '.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus('Избранное скачано: ' + payload.length + ' вариантов.', 'ok');
+    }
+
+    function downloadCommuteIssuesJson() {
+      const issueRows = getCommuteIssueRows();
+      if (!issueRows.length) {
+        setStatus('Сначала отметь варианты кнопкой ⚠.', 'warn');
+        return;
+      }
+
+      const payload = issueRows.map((row) => ({
+        ...row,
+        flagReason: 'Указанное время не совпало с фактическим',
+        flaggedAt: new Date().toISOString(),
+      }));
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      anchor.href = url;
+      anchor.download = 'commute-issues-' + stamp + '.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus('Список расхождений скачан: ' + payload.length + ' вариантов.', 'ok');
+    }
+
     function setFullViewVisible(isVisible) {
       els.fullView.classList.toggle('hidden', !isVisible);
       document.querySelectorAll('.analytics-section').forEach((section) => {
@@ -3261,6 +3830,7 @@ const analyticsPage = String.raw`<!doctype html>
           el.innerHTML = '<div class="empty">Загрузи JSON и нажми “Построить”.</div>';
         });
         setStage(state.items.length ? 'JSON загружен' : 'Ожидание файла', state.items.length ? 'warn' : 'info');
+        updateImageButtonState();
         return;
       }
       renderMetrics();
@@ -3270,6 +3840,7 @@ const analyticsPage = String.raw`<!doctype html>
       openTableFromUrl();
       setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + els.olyaKey.value + ', ' + els.nikitaKey.value + '.', 'ok');
       setStage('Аналитика построена', 'ok');
+      updateImageButtonState();
     }
 
     function loadText(text) {
@@ -3429,15 +4000,15 @@ const analyticsPage = String.raw`<!doctype html>
     function renderTables() {
       if (!state.analyticsView) return;
       const rows = state.tableRows;
-      renderTable(els.cheapTable, rows.cheap || [], buildAnalyticsColumns('cheap'), 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap' });
-      renderTable(els.expensiveTable, rows.expensive || [], buildAnalyticsColumns('expensive'), 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive' });
-      renderTable(els.olyaTable, rows.olya || [], buildAnalyticsColumns('olya'), 10, { limit: PREVIEW_LIMIT, tableKey: 'olya' });
-      renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
-      renderTable(els.balancedTable, rows.balanced || [], buildAnalyticsColumns('balanced'), 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced' });
-      renderTable(els.scoreTable, rows.score || [], buildAnalyticsColumns('score'), 10, { limit: PREVIEW_LIMIT, tableKey: 'score' });
-      renderTable(els.valueTable, rows.value || [], buildAnalyticsColumns('value'), 10, { limit: PREVIEW_LIMIT, tableKey: 'value' });
-      renderTable(els.startTable, rows.start || [], buildAnalyticsColumns('start'), 10, { limit: PREVIEW_LIMIT, tableKey: 'start' });
-      renderTable(els.minuteTable, rows.minute || [], buildAnalyticsColumns('minute'), 10, { limit: PREVIEW_LIMIT, tableKey: 'minute' });
+      renderTable(els.cheapTable, rows.cheap || [], buildAnalyticsColumns('cheap'), 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap', getRowClass });
+      renderTable(els.expensiveTable, rows.expensive || [], buildAnalyticsColumns('expensive'), 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive', getRowClass });
+      renderTable(els.olyaTable, rows.olya || [], buildAnalyticsColumns('olya'), 10, { limit: PREVIEW_LIMIT, tableKey: 'olya', getRowClass });
+      renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita', getRowClass });
+      renderTable(els.balancedTable, rows.balanced || [], buildAnalyticsColumns('balanced'), 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced', getRowClass });
+      renderTable(els.scoreTable, rows.score || [], buildAnalyticsColumns('score'), 10, { limit: PREVIEW_LIMIT, tableKey: 'score', getRowClass });
+      renderTable(els.valueTable, rows.value || [], buildAnalyticsColumns('value'), 10, { limit: PREVIEW_LIMIT, tableKey: 'value', getRowClass });
+      renderTable(els.startTable, rows.start || [], buildAnalyticsColumns('start'), 10, { limit: PREVIEW_LIMIT, tableKey: 'start', getRowClass });
+      renderTable(els.minuteTable, rows.minute || [], buildAnalyticsColumns('minute'), 10, { limit: PREVIEW_LIMIT, tableKey: 'minute', getRowClass });
       els.olyaAvg.textContent = 'вариантов: ' + (rows.olya || []).length + ', средняя аренда: ' + rub(average((rows.olya || []).map((row) => row.rent)));
       els.nikitaAvg.textContent = 'вариантов: ' + (rows.nikita || []).length + ', средняя аренда: ' + rub(average((rows.nikita || []).map((row) => row.rent)));
       els.balancedAvg.textContent = 'средняя аренда: ' + rub(average((rows.balanced || []).map((row) => row.rent)));
@@ -3445,6 +4016,7 @@ const analyticsPage = String.raw`<!doctype html>
       els.valueAvg.textContent = 'вариантов с площадью: ' + (rows.value || []).length;
       els.startAvg.textContent = 'средний вход: ' + rub(average((rows.start || []).map((row) => row.startPayment)));
       els.minuteAvg.textContent = 'среднее: ' + rub(average((rows.minute || []).map((row) => row.rubPerCommuteMin)));
+      renderFavorites();
     }
 
     function renderBuckets() {
@@ -3473,6 +4045,8 @@ const analyticsPage = String.raw`<!doctype html>
       renderInsights();
       renderTables();
       renderBuckets();
+      renderFavorites();
+      renderCommuteIssues();
       openTableFromUrl();
       if (state.analyticsView) {
         setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + (els.olyaKey.value || '-') + ', ' + (els.nikitaKey.value || '-') + '.', 'ok');
@@ -3491,7 +4065,8 @@ const analyticsPage = String.raw`<!doctype html>
 
       els.fullTitle.textContent = tableTitles[tableKey] || 'Все варианты';
       els.fullStatus.textContent = 'Всего вариантов: ' + rows.length;
-      renderTable(els.fullTable, rows, columns, state.tableHighlights[tableKey] || 0);
+      state.openTableKey = tableKey;
+      renderTable(els.fullTable, rows, columns, state.tableHighlights[tableKey] || 0, { getRowClass });
       setFullViewVisible(true);
 
       if (!options.skipHistory) {
@@ -3501,6 +4076,7 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function closeFullTable(options = {}) {
+      state.openTableKey = null;
       setFullViewVisible(false);
       if (!options.skipHistory) {
         history.pushState({}, '', '/analytics');
@@ -3554,10 +4130,45 @@ const analyticsPage = String.raw`<!doctype html>
 
     els.fileInput.addEventListener('change', handleFile);
     els.analyzeBtn.addEventListener('click', handleAnalyze);
+    els.imageButton.addEventListener('click', () => { void loadPreviewImages(); });
+    els.downloadFavoritesBtn.addEventListener('click', downloadFavoritesJson);
+    els.downloadCommuteIssuesBtn.addEventListener('click', downloadCommuteIssuesJson);
     els.fastLimit.addEventListener('input', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
     els.olyaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
     els.nikitaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
     document.addEventListener('click', (event) => {
+      const favoriteButton = event.target.closest('.js-fav-toggle');
+      if (favoriteButton) {
+        const key = decodeKey(favoriteButton.dataset.favoriteKey || '');
+        const row = state.rows.find((item) => getFavoriteKey(item) === key);
+        if (row) toggleFavoriteRow(row);
+        return;
+      }
+
+      const issueButton = event.target.closest('.js-issue-toggle');
+      if (issueButton) {
+        const key = decodeKey(issueButton.dataset.issueKey || '');
+        const row = state.rows.find((item) => getFavoriteKey(item) === key);
+        if (row) toggleCommuteIssueRow(row);
+        return;
+      }
+
+      const viewedLink = event.target.closest('.js-viewed-link');
+      if (viewedLink) {
+        const key = decodeKey(viewedLink.dataset.viewKey || '');
+        const row = state.rows.find((item) => getFavoriteKey(item) === key);
+        if (row) {
+          markViewedRow(row);
+          renderTables();
+          renderBuckets();
+          if (state.openTableKey) {
+            const rows = state.tableRows[state.openTableKey] || [];
+            const columns = buildAnalyticsColumns(state.openTableKey);
+            renderTable(els.fullTable, rows, columns, state.tableHighlights[state.openTableKey] || 0, { getRowClass });
+          }
+        }
+      }
+
       const button = event.target.closest('.js-open-table');
       if (!button) return;
       openFullTable(button.dataset.table);
@@ -3917,19 +4528,30 @@ const costsPage = String.raw`<!doctype html>
       return parseMoney(item?.price ?? item?.Price ?? item?.цена ?? '');
     }
 
+    function getPaymentSourceText(item) {
+      return [item?.dop, item?.description].map(displayText).join(' ').replace(/\s+/g, ' ').trim();
+    }
+
     function findCommissionPercent(item) {
-      const source = [item?.dop, item?.description].map(displayText).join(' ');
+      const source = getPaymentSourceText(item);
+      if (/без\s+комисс/i.test(source)) return 0;
+
       const match = source.match(/комисс\w*[^0-9]{0,24}(\d{1,3})\s*%/i);
       if (!match) return null;
+
       const percent = Number(match[1]);
       return Number.isFinite(percent) ? Math.max(0, percent) : null;
     }
 
     function findDeposit(item, monthlyPrice) {
-      const source = [item?.dop, item?.description].map(displayText).join(' ');
+      const source = getPaymentSourceText(item);
+      if (/без\s+залог/i.test(source)) {
+        return { value: 0, found: true, inferred: false };
+      }
+
       const depositMatch = source.match(/(?:залог|депозит)[^0-9₽р]{0,40}(\d[\d\s.]*)\s*(?:₽|руб|р\.?)/i);
       if (depositMatch) {
-        const parsed = parseMoney(depositMatch[0]);
+        const parsed = parseMoney(depositMatch[1]);
         return { value: parsed, found: true, inferred: false };
       }
 
@@ -3961,6 +4583,10 @@ const costsPage = String.raw`<!doctype html>
       const commission = commissionPercent === null ? 0 : rent * commissionPercent / 100;
       const deposit = findDeposit(item, rent);
       const total = rentForPeriod + commission + deposit.value;
+      const commissionText = commissionPercent === null ? 'не найдена' : commissionPercent + '%';
+      const depositText = deposit.found
+        ? deposit.inferred ? 'залог принят как 1 месяц' : 'залог найден'
+        : 'залог не найден';
 
       return {
         item,
@@ -3969,11 +4595,18 @@ const costsPage = String.raw`<!doctype html>
         link: getLink(item),
         months,
         rent,
+        rentPerMonth: rent,
         rentForPeriod,
         commissionPercent,
         commission,
         deposit,
+        depositValue: deposit.value,
+        commissionText,
+        depositText,
+        paymentSource: getPaymentSourceText(item),
         total,
+        totalForPeriod: total,
+        paymentFormula: rub(rent) + ' × ' + months + ' мес. + ' + rub(commission) + ' + ' + rub(deposit.value),
       };
     }
 
@@ -4047,15 +4680,13 @@ const costsPage = String.raw`<!doctype html>
               const title = row.link
                 ? '<a class="title" href="' + esc(row.link) + '" target="_blank" rel="noopener noreferrer">' + esc(row.title) + '</a>'
                 : '<div class="title">' + esc(row.title) + '</div>';
-              const commissionText = row.commissionPercent === null ? 'не найдена' : row.commissionPercent + '%';
-              const depositNote = row.deposit.found
-                ? row.deposit.inferred ? 'залог принят как 1 месяц' : 'залог найден'
-                : 'залог не найден';
+              const commissionText = row.commissionText;
+              const depositNote = row.depositText;
               const warnings = [
                 row.commissionPercent === null ? '<span class="warn">Комиссия не найдена, считается 0 ₽</span>' : '',
                 row.deposit.found ? '' : '<span class="warn">Залог не найден, считается 0 ₽</span>',
               ].filter(Boolean).join('');
-              const formula = rub(row.rent) + ' × ' + row.months + ' мес. + ' + rub(row.commission) + ' + ' + rub(row.deposit.value);
+              const formula = row.paymentFormula;
 
               return [
                 '<tr>',
@@ -4109,6 +4740,11 @@ const costsPage = String.raw`<!doctype html>
         commission: Math.round(row.commission),
         deposit: Math.round(row.deposit.value),
         total_for_period: Math.round(row.total),
+        rent_per_month_raw: Math.round(row.rentPerMonth),
+        commission_text: row.commissionText,
+        deposit_text: row.depositText,
+        payment_source: row.paymentSource,
+        payment_formula: row.paymentFormula,
       }));
 
       const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json;charset=utf-8' });

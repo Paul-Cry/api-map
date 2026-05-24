@@ -93,6 +93,73 @@ function splitIntoChunks(items, count) {
   return chunks;
 }
 
+function formatDurationLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours} ч ${minutes} мин`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes} мин ${seconds} сек`;
+  }
+
+  return `${seconds} сек`;
+}
+
+function estimateWorkerFinish(worker) {
+  if (!worker || !worker.currentJobId) return null;
+
+  const job = jobs.get(worker.currentJobId);
+  if (!job || !job.startedAt) return null;
+
+  const progress = worker.progress || {};
+  const routesTotal = Math.max(0, Number(progress.routesTotal || 0));
+  const routesDone = Math.max(0, Number(progress.routesDone || 0));
+  const routesRemaining = worker.status === 'busy' || worker.status === 'stopping'
+    ? Math.max(0, routesTotal - routesDone)
+    : 0;
+
+  if (!routesRemaining) {
+    return {
+      routesRemaining: 0,
+      remainingMs: 0,
+      estimatedFinishAt: null,
+      estimatedFinishLabel: 'почти готово',
+    };
+  }
+
+  const startedAtMs = Date.parse(job.startedAt);
+  const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : 0;
+  let averageRouteMs = 0;
+
+  if (routesDone > 0 && elapsedMs > 0) {
+    averageRouteMs = elapsedMs / routesDone;
+  } else {
+    averageRouteMs = Math.max(2500, elapsedMs || 0);
+  }
+
+  const remainingMs = Math.max(0, Math.round(averageRouteMs * routesRemaining));
+  const estimatedFinishAtMs = Date.now() + remainingMs;
+
+  return {
+    routesRemaining,
+    remainingMs,
+    estimatedFinishAt: new Date(estimatedFinishAtMs).toISOString(),
+    estimatedFinishLabel: new Date(estimatedFinishAtMs).toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+    remainingDurationLabel: formatDurationLabel(remainingMs),
+  };
+}
+
 function activeWorkers() {
   const threshold = Date.now() - WORKER_TTL_MS;
   return [...workers.values()].filter((worker) => worker.lastSeenMs >= threshold);
@@ -108,12 +175,17 @@ function workerEffectiveStatus(worker) {
 
 function workerView(worker) {
   const status = workerEffectiveStatus(worker);
+  const eta = estimateWorkerFinish(worker);
   return {
     workerId: worker.workerId,
     name: worker.name || '',
     status,
     currentJobId: worker.currentJobId || null,
     lastSeenAt: worker.lastSeenAt,
+    estimatedFinishAt: eta?.estimatedFinishAt || null,
+    estimatedFinishLabel: eta?.estimatedFinishLabel || '',
+    remainingDurationLabel: eta?.remainingDurationLabel || '',
+    eta,
     ready: status === 'ready',
     stopped: status === 'stopped' || status === 'stopping',
     stopRequestedAt: worker.stopRequestedAt || null,
@@ -598,6 +670,8 @@ function dashboardHtml() {
         const routesDone = Number(progress.routesDone || 0);
         const routesTotal = Number(progress.routesTotal || 0);
         const percent = pct(routesDone, routesTotal);
+        const etaLabel = worker.estimatedFinishLabel || '';
+        const etaDuration = worker.remainingDurationLabel || '';
         const isStopping = worker.status === 'stopping';
         const isStopped = worker.status === 'stopped';
         const stopped = isStopping || isStopped;
@@ -614,6 +688,9 @@ function dashboardHtml() {
               <span>Объекты: \${progress.objectsDone || 0}/\${progress.objectsTotal || 0}</span>
               <span>Осталось: \${progress.objectsRemaining || 0}</span>
               <span>Маршруты: \${routesDone}/\${routesTotal}</span>
+            </div>
+            <div class="worker-note">
+              \${etaLabel ? 'Закончит примерно в ' + etaLabel + (etaDuration ? ' · осталось ' + etaDuration : '') : 'ETA пока считается...'}
             </div>
             \${isStopping ? '<div class="worker-note">Ожидает завершения текущей задачи перед остановкой.</div>' : ''}
             \${isStopped ? '<div class="worker-note">Worker остановлен и не получает новые задачи.</div>' : ''}
