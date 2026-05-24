@@ -894,13 +894,43 @@ async function readSavedAnalyticsData() {
   try {
     const text = await readFile(ANALYTICS_DATA_FILE, 'utf8');
     const payload = JSON.parse(text);
-    const items = unwrapItems(payload);
+    if (Array.isArray(payload) || Array.isArray(payload?.items)) {
+      const items = unwrapItems(payload);
+      return {
+        items,
+        updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
+        datasets: [],
+        activeId: null,
+        activeName: null,
+      };
+    }
+
+    const datasets = Array.isArray(payload?.datasets) ? payload.datasets : [];
+    const activeId = typeof payload?.activeId === 'string' ? payload.activeId : null;
+    const normalizedDatasets = datasets
+      .map((dataset, index) => {
+        const items = unwrapItems(dataset);
+        const id = String(dataset?.id || dataset?.name || `dataset-${index + 1}`);
+        const name = String(dataset?.name || dataset?.label || `Список ${index + 1}`);
+        return {
+          id,
+          name,
+          items,
+          updatedAt: typeof dataset?.updatedAt === 'string' ? dataset.updatedAt : null,
+        };
+      })
+      .filter((dataset) => dataset.items.length);
+    const activeDataset = normalizedDatasets.find((dataset) => dataset.id === activeId) || normalizedDatasets[0] || null;
+    const fallbackUpdatedAt = typeof payload?.updatedAt === 'string' ? payload.updatedAt : null;
     return {
-      items,
-      updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
+      items: activeDataset?.items || [],
+      updatedAt: activeDataset?.updatedAt || fallbackUpdatedAt,
+      datasets: normalizedDatasets,
+      activeId: activeDataset?.id || null,
+      activeName: activeDataset?.name || null,
     };
   } catch (error) {
-    if (error?.code === 'ENOENT') return { items: [], updatedAt: null };
+    if (error?.code === 'ENOENT') return { items: [], updatedAt: null, datasets: [], activeId: null, activeName: null };
     throw error;
   }
 }
@@ -911,6 +941,14 @@ async function handleGetAnalyticsData(req, res) {
     items: saved.items,
     count: saved.items.length,
     updatedAt: saved.updatedAt,
+    datasets: saved.datasets.map((dataset) => ({
+      id: dataset.id,
+      name: dataset.name,
+      count: dataset.items.length,
+      updatedAt: dataset.updatedAt,
+    })),
+    activeId: saved.activeId,
+    activeName: saved.activeName,
   });
 }
 
@@ -919,17 +957,34 @@ async function handleSaveAnalyticsData(req, res) {
   const body = await readBody(req);
   const payload = JSON.parse(body || '{}');
   const items = unwrapItems(payload);
-  const saved = {
+  const name = String(payload?.name || payload?.label || '').trim() || `Список ${new Date().toLocaleDateString('ru-RU')}`;
+  const active = payload?.active !== false;
+  const datasetId = String(payload?.id || name).trim();
+  const existing = await readSavedAnalyticsData();
+  const nextDataset = {
+    id: datasetId,
+    name,
     updatedAt: new Date().toISOString(),
-    count: items.length,
     items,
   };
+  const existingIndex = existing.datasets.findIndex((dataset) => dataset.id === datasetId);
+  const datasets = existingIndex >= 0
+    ? existing.datasets.map((dataset, index) => index === existingIndex ? nextDataset : dataset)
+    : [...existing.datasets, nextDataset];
+  const activeId = active ? datasetId : (existing.activeId || datasetId);
+  const nextState = {
+    updatedAt: nextDataset.updatedAt,
+    activeId,
+    datasets,
+  };
 
-  await writeFile(ANALYTICS_DATA_FILE, JSON.stringify(saved, null, 2), 'utf8');
+  await writeFile(ANALYTICS_DATA_FILE, JSON.stringify(nextState, null, 2), 'utf8');
   jsonResponse(res, 200, {
     ok: true,
     count: items.length,
-    updatedAt: saved.updatedAt,
+    updatedAt: nextDataset.updatedAt,
+    activeId,
+    activeName: name,
   });
 }
 
@@ -2706,9 +2761,11 @@ const analyticsPage = String.raw`<!doctype html>
 
     <section class="toolbar">
       <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
+      <label class="field">Сохранённый список <select id="savedListSelect"></select></label>
       <label class="field">Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
       <label class="field">Поле Оли <select id="olyaKey"></select></label>
       <label class="field">Поле Никиты <select id="nikitaKey"></select></label>
+      <button id="loadSavedBtn" class="action-btn" type="button">Загрузить список</button>
       <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
       <button id="imageButton" class="action-btn" type="button">Фото объявлений</button>
     </section>
@@ -2848,6 +2905,8 @@ const analyticsPage = String.raw`<!doctype html>
   <script>
     const els = {
       fileInput: document.querySelector('#fileInput'),
+      savedListSelect: document.querySelector('#savedListSelect'),
+      loadSavedBtn: document.querySelector('#loadSavedBtn'),
       jsonInput: document.querySelector('#jsonInput'),
       analyzeBtn: document.querySelector('#analyzeBtn'),
       fastLimit: document.querySelector('#fastLimit'),
@@ -2914,6 +2973,7 @@ const analyticsPage = String.raw`<!doctype html>
       items: [],
       rows: [],
       timeKeys: [],
+      savedDatasets: [],
       tableRows: {},
       tableColumns: {},
       tableHighlights: {},
@@ -3726,7 +3786,6 @@ const analyticsPage = String.raw`<!doctype html>
 
       renderTable(els.commuteIssuesTable, issueRows, buildAnalyticsColumns('cheap'), 0, {
         limit: issueRows.length,
-        tableKey: 'commute-issues',
         getRowClass,
       });
     }
@@ -3826,7 +3885,7 @@ const analyticsPage = String.raw`<!doctype html>
         els.metrics.innerHTML = '';
         els.insights.innerHTML = '';
         setFullViewVisible(false);
-        [els.cheapTable, els.expensiveTable, els.olyaTable, els.nikitaTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.valueTable, els.startTable, els.minuteTable, els.categoryTable].forEach((el) => {
+        [els.cheapTable, els.expensiveTable, els.olyaTable, els.nikitaTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.valueTable, els.startTable, els.minuteTable, els.categoryTable, els.commuteIssuesTable].forEach((el) => {
           el.innerHTML = '<div class="empty">Загрузи JSON и нажми “Построить”.</div>';
         });
         setStage(state.items.length ? 'JSON загружен' : 'Ожидание файла', state.items.length ? 'warn' : 'info');
@@ -3878,20 +3937,50 @@ const analyticsPage = String.raw`<!doctype html>
         setStage('Проверяю сохранённый JSON', 'info');
         const response = await fetch('/api/analytics-data');
         const data = await readJsonResponse(response, 'Не удалось загрузить сохранённый JSON.');
-        if (!Array.isArray(data.items) || !data.items.length) return;
-        els.jsonInput.value = JSON.stringify(data.items, null, 2);
-        state.items = data.items;
-        state.timeKeys = detectTimeKeys(data.items);
+        const serverDatasets = Array.isArray(data.datasets) ? data.datasets : [];
+        state.savedDatasets = serverDatasets.length ? serverDatasets : (Array.isArray(data.items) && data.items.length ? [{
+          id: 'active',
+          name: data.activeName || 'Сохранённый JSON',
+          count: data.items.length,
+          updatedAt: data.updatedAt || null,
+          items: data.items,
+        }] : []);
+        const selectedId = data.activeId || state.savedDatasets[0]?.id || '';
+        const options = ['<option value="">Выбери список</option>']
+          .concat(state.savedDatasets.map((dataset) => '<option value="' + esc(dataset.id) + '"' + (dataset.id === selectedId ? ' selected' : '') + '>' + esc(dataset.name) + ' (' + dataset.count + ')</option>'));
+        els.savedListSelect.innerHTML = options.join('');
+        if (!state.savedDatasets.length) return;
+        els.savedListSelect.value = selectedId;
+        const active = state.savedDatasets.find((dataset) => dataset.id === selectedId) || state.savedDatasets[0];
+        if (!active) return;
+        els.jsonInput.value = JSON.stringify(active.items || [], null, 2);
+        state.items = active.items || [];
+        state.timeKeys = detectTimeKeys(state.items);
         fillTimeSelects();
         prepareRows();
         renderAll();
-        const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
-        setStatus('Загружен сохранённый JSON: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+        const updatedText = active.updatedAt ? ' Обновлено: ' + new Date(active.updatedAt).toLocaleString('ru-RU') + '.' : '';
+        setStatus('Загружен список "' + active.name + '": ' + state.items.length + ' объектов.' + updatedText, 'ok');
         setStage('Сохранённый JSON загружен', 'ok');
       } catch (error) {
         setStatus('Сохранённый JSON не загружен: ' + (error?.message || String(error)), 'warn');
         setStage('Сохранение не найдено', 'warn');
       }
+    }
+
+    function loadSelectedSavedList() {
+      const selectedId = els.savedListSelect.value;
+      const selected = state.savedDatasets.find((dataset) => dataset.id === selectedId);
+      if (!selected) return;
+      els.jsonInput.value = JSON.stringify(selected.items || [], null, 2);
+      state.items = selected.items || [];
+      state.timeKeys = detectTimeKeys(state.items);
+      fillTimeSelects();
+      prepareRows();
+      renderAll();
+      const updatedText = selected.updatedAt ? ' Обновлено: ' + new Date(selected.updatedAt).toLocaleString('ru-RU') + '.' : '';
+      setStatus('Загружен список "' + selected.name + '": ' + state.items.length + ' объектов.' + updatedText, 'ok');
+      setStage('Список загружен', 'ok');
     }
 
     async function handleFile() {
@@ -4129,6 +4218,10 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     els.fileInput.addEventListener('change', handleFile);
+    els.loadSavedBtn.addEventListener('click', loadSelectedSavedList);
+    els.savedListSelect.addEventListener('change', () => {
+      state.selectedSavedId = els.savedListSelect.value;
+    });
     els.analyzeBtn.addEventListener('click', handleAnalyze);
     els.imageButton.addEventListener('click', () => { void loadPreviewImages(); });
     els.downloadFavoritesBtn.addEventListener('click', downloadFavoritesJson);
@@ -5226,9 +5319,11 @@ const analyticsAdminPage = String.raw`<!doctype html>
         <div class="grid">
           <label class="field">Админ-ключ <input id="adminKey" type="password" placeholder="ANALYTICS_ADMIN_KEY"></label>
           <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
+          <label class="field">Имя списка <input id="datasetName" type="text" placeholder="Например: Март 2026"></label>
+          <label class="field">Сохранённый список <select id="savedListSelect"></select></label>
         </div>
         <div class="row">
-          <button id="loadSavedBtn" class="action-btn" type="button">Загрузить сохранённый</button>
+        <button id="loadSavedBtn" class="action-btn" type="button">Загрузить сохранённый</button>
           <button id="saveBtn" class="action-btn primary" type="button">Сохранить JSON</button>
           <span class="pill">Объектов: <span id="countInfo" style="margin-left:6px;">0</span></span>
           <span class="pill">Обновлено: <span id="updatedInfo" style="margin-left:6px;">нет</span></span>
@@ -5244,6 +5339,8 @@ const analyticsAdminPage = String.raw`<!doctype html>
     const els = {
       adminKey: document.querySelector('#adminKey'),
       fileInput: document.querySelector('#fileInput'),
+      datasetName: document.querySelector('#datasetName'),
+      savedListSelect: document.querySelector('#savedListSelect'),
       loadSavedBtn: document.querySelector('#loadSavedBtn'),
       saveBtn: document.querySelector('#saveBtn'),
       jsonInput: document.querySelector('#jsonInput'),
@@ -5251,6 +5348,8 @@ const analyticsAdminPage = String.raw`<!doctype html>
       countInfo: document.querySelector('#countInfo'),
       updatedInfo: document.querySelector('#updatedInfo'),
     };
+
+    let savedDatasets = [];
 
     function unwrapJson(value) {
       if (Array.isArray(value)) return value;
@@ -5265,6 +5364,10 @@ const analyticsAdminPage = String.raw`<!doctype html>
       els.status.style.color = tone === 'ok' ? 'var(--accent)' : tone === 'warn' ? 'var(--warn)' : tone === 'bad' ? 'var(--bad)' : 'var(--muted)';
     }
 
+    function esc(value) {
+      return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
     function updateCountFromText() {
       try {
         const items = unwrapJson(JSON.parse(els.jsonInput.value || '[]'));
@@ -5276,14 +5379,24 @@ const analyticsAdminPage = String.raw`<!doctype html>
       }
     }
 
-    async function loadSaved() {
+    async function loadSaved(selectedId = '') {
       try {
         const response = await fetch('/api/analytics-data');
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Не удалось загрузить JSON.');
-        els.jsonInput.value = JSON.stringify(data.items || [], null, 2);
-        els.countInfo.textContent = String(data.count || 0);
-        els.updatedInfo.textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleString('ru-RU') : 'нет';
+        savedDatasets = Array.isArray(data.datasets) ? data.datasets : [];
+        const activeId = data.activeId || savedDatasets[0]?.id || '';
+        els.savedListSelect.innerHTML = ['<option value="">Выбери список</option>']
+          .concat(savedDatasets.map((dataset) => '<option value="' + esc(dataset.id) + '"' + (dataset.id === activeId ? ' selected' : '') + '>' + esc(dataset.name) + ' (' + dataset.count + ')</option>'))
+          .join('');
+        const targetId = selectedId || activeId;
+        const selected = savedDatasets.find((dataset) => dataset.id === targetId);
+        const items = selected?.items || data.items || [];
+        els.savedListSelect.value = selected?.id || activeId || '';
+        els.jsonInput.value = JSON.stringify(items, null, 2);
+        els.datasetName.value = selected?.name || data.activeName || '';
+        els.countInfo.textContent = String(items.length);
+        els.updatedInfo.textContent = (selected?.updatedAt || data.updatedAt) ? new Date(selected?.updatedAt || data.updatedAt).toLocaleString('ru-RU') : 'нет';
         setStatus('Сохранённый JSON загружен.', 'ok');
       } catch (error) {
         setStatus(error?.message || String(error), 'bad');
@@ -5295,19 +5408,26 @@ const analyticsAdminPage = String.raw`<!doctype html>
         const items = updateCountFromText();
         if (!items) throw new Error('Проверь JSON перед сохранением.');
         const key = els.adminKey.value.trim();
+        const name = els.datasetName.value.trim();
 
         if (!key) throw new Error('Введи админ-ключ.');
 
         const response = await fetch('/api/analytics-data', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
-          body: JSON.stringify(items),
+          body: JSON.stringify({
+            items,
+            name: name || undefined,
+            id: els.savedListSelect.value || undefined,
+            active: true,
+          }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Не удалось сохранить JSON.');
         els.countInfo.textContent = String(data.count || items.length);
         els.updatedInfo.textContent = data.updatedAt ? new Date(data.updatedAt).toLocaleString('ru-RU') : 'только что';
-        setStatus('JSON сохранён. Теперь /analytics будет брать эти данные.', 'ok');
+        setStatus('Список сохранён. Теперь /analytics будет брать эти данные.', 'ok');
+        await loadSaved();
       } catch (error) {
         setStatus(error?.message || String(error), 'bad');
       }
@@ -5323,8 +5443,14 @@ const analyticsAdminPage = String.raw`<!doctype html>
 
     els.fileInput.addEventListener('change', handleFile);
     els.jsonInput.addEventListener('input', updateCountFromText);
-    els.loadSavedBtn.addEventListener('click', loadSaved);
+    els.loadSavedBtn.addEventListener('click', () => loadSaved(els.savedListSelect.value));
     els.saveBtn.addEventListener('click', saveJson);
+    els.savedListSelect.addEventListener('change', () => {
+      const selected = savedDatasets.find((dataset) => dataset.id === els.savedListSelect.value);
+      if (selected) {
+        els.datasetName.value = selected.name;
+      }
+    });
     if (DEFAULT_ADMIN_KEY) els.adminKey.value = DEFAULT_ADMIN_KEY;
     loadSaved();
   </script>
