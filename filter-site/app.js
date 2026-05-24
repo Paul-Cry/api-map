@@ -4389,6 +4389,36 @@ const mergePage = String.raw`<!doctype html>
       throw new Error('JSON должен быть массивом или объектом с result/items/data.');
     }
 
+    function cleanMergedAddress(value) {
+      const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+      if (!text) return '';
+
+      const parts = text.split(',').map((part) => part.trim()).filter(Boolean);
+      const kept = [];
+
+      for (const part of parts) {
+        if (/^(?:р-н|район)\b/i.test(part)) continue;
+        if (/^м\.\s*/iu.test(part)) continue;
+        if (/^метро\b/i.test(part)) continue;
+        kept.push(part);
+      }
+
+      return kept.join(', ').replace(/\s*,\s*/g, ', ').replace(/,\s*,+/g, ', ').trim();
+    }
+
+    function cleanMergedItem(item) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+
+      const next = { ...item };
+      for (const key of ['adress', 'address', 'адрес']) {
+        if (typeof next[key] === 'string' && next[key].trim()) {
+          next[key] = cleanMergedAddress(next[key]);
+        }
+      }
+
+      return next;
+    }
+
     async function readFile(file) {
       const text = await file.text();
       return unwrapJson(JSON.parse(text));
@@ -4425,7 +4455,7 @@ const mergePage = String.raw`<!doctype html>
     }
 
     function mergeFiles() {
-      const merged = [...state.arrays[0], ...state.arrays[1]];
+      const merged = [...state.arrays[0], ...state.arrays[1]].map(cleanMergedItem);
       state.merged = merged;
       updateUi();
 
@@ -4438,7 +4468,7 @@ const mergePage = String.raw`<!doctype html>
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus('Объединено объектов: ' + merged.length + '.', 'ok');
+      setStatus('Объединено объектов: ' + merged.length + '. Адреса очищены от района и метро.', 'ok');
     }
 
     function resetAll() {
