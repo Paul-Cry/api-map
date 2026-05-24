@@ -76,21 +76,19 @@ function sendDownload(res, filename, payload) {
 
 function splitIntoChunks(items, count) {
   const safeCount = Math.max(1, Math.min(Number(count) || 1, items.length || 1));
-  const baseSize = Math.floor(items.length / safeCount);
-  const remainder = items.length % safeCount;
-  const chunks = [];
-  let start = 0;
+  const chunks = Array.from({ length: safeCount }, () => []);
 
-  for (let index = 0; index < safeCount; index += 1) {
-    const size = baseSize + (index < remainder ? 1 : 0);
-    const end = start + size;
-    if (size > 0) {
-      chunks.push(items.slice(start, end));
-    }
-    start = end;
-  }
+  items.forEach((item, index) => {
+    chunks[index % safeCount].push(item);
+  });
 
-  return chunks;
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
+function getBalancedChunkCount(itemsLength, requestedWorkers) {
+  const workerCount = Math.max(1, Number(requestedWorkers) || 1);
+  const targetChunks = workerCount * 3;
+  return Math.max(workerCount, Math.min(itemsLength || 1, targetChunks));
 }
 
 function activeWorkers() {
@@ -540,6 +538,7 @@ function dashboardHtml() {
           <input id="jsonFile" type="file" accept=".json,application/json">
           <label class="muted" for="workersCount">На сколько примерно равных частей делить</label>
           <input id="workersCount" type="number" min="1" value="4">
+          <div class="muted">Для более ровной нагрузки сервер может разбить файл на большее число мелких задач.</div>
           <button id="runButton" disabled>Запустить обработку</button>
           <div id="message">Выбери JSON-файл.</div>
         </div>
@@ -994,7 +993,8 @@ async function handleRequest(req, res) {
 
     const readyWorkers = activeWorkers().filter((worker) => worker.status === 'ready');
     const requestedWorkers = Number(body?.workers || readyWorkers.length || 1);
-    const chunks = splitIntoChunks(items, Math.max(1, Math.min(items.length || 1, requestedWorkers)));
+    const chunkCount = getBalancedChunkCount(items.length, requestedWorkers);
+    const chunks = splitIntoChunks(items, chunkCount);
     const batchId = randomUUID();
     const batch = {
       batchId,
