@@ -2683,7 +2683,28 @@ const analyticsPage = String.raw`<!doctype html>
       align-items: center;
     }
     .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; background: rgba(137,167,255,0.14); color: #dfe6ff; font-size: 12px; font-weight: 800; }
-    .viewed-row td { background: rgba(255, 255, 255, 0.02); opacity: 0.76; }
+    .viewed-row td {
+      background: rgba(137, 167, 255, 0.08);
+      opacity: 1;
+    }
+    .viewed-row td[data-label="Объект"] > .cell-inner::before {
+      content: 'Просмотрено';
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      margin-bottom: 8px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: rgba(137, 167, 255, 0.22);
+      color: #e9efff;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .viewed-row td[data-label="Объект"] {
+      box-shadow: inset 4px 0 0 rgba(137, 167, 255, 0.72);
+    }
     .fresh-row td { background: rgba(124, 199, 168, 0.045); }
     .favorite-row td { background: rgba(255, 133, 133, 0.07); }
     .issue-row td { background: rgba(242, 195, 107, 0.06); }
@@ -2725,6 +2746,19 @@ const analyticsPage = String.raw`<!doctype html>
       white-space: nowrap;
     }
     .small-btn:hover { border-color: rgba(124, 199, 168, 0.48); background: rgba(124, 199, 168, 0.16); }
+    .saved-list-info {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding: 0 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
     .full-view.hidden, .analytics-section.hidden { display: none; }
     .empty { min-height: 170px; display: grid; place-items: center; color: var(--muted); text-align: center; }
     .method { display: grid; gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
@@ -2737,8 +2771,56 @@ const analyticsPage = String.raw`<!doctype html>
       .app { width: min(100vw - 16px, 760px); padding-top: 10px; }
       h1 { font-size: 24px; }
       .metrics, .insights { grid-template-columns: 1fr; }
-      .panel-body { overflow-x: auto; }
-      table { min-width: 720px; }
+      .panel-body { overflow-x: visible; }
+      table, thead, tbody, tr, td { display: block; width: 100%; }
+      table { min-width: 0; }
+      thead { display: none; }
+      tbody { display: grid; gap: 10px; }
+      tr {
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px;
+        background: rgba(255,255,255,0.03);
+        overflow: hidden;
+      }
+      td {
+        display: grid;
+        grid-template-columns: 108px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 10px 12px;
+      }
+      td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        padding-top: 3px;
+      }
+      td > .cell-inner {
+        min-width: 0;
+        justify-self: end;
+        text-align: right;
+      }
+      td[data-label="Объект"] {
+        grid-template-columns: 1fr;
+      }
+      td[data-label="Объект"]::before {
+        margin-bottom: 2px;
+      }
+      td[data-label="Объект"] > .cell-inner {
+        justify-self: stretch;
+        text-align: left;
+      }
+      .listing-cell {
+        width: 100%;
+        gap: 8px;
+      }
+      .thumb {
+        width: 70px;
+        height: 52px;
+      }
     }
   </style>
 </head>
@@ -2765,7 +2847,8 @@ const analyticsPage = String.raw`<!doctype html>
       <label class="field">Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
       <label class="field">Поле Оли <select id="olyaKey"></select></label>
       <label class="field">Поле Никиты <select id="nikitaKey"></select></label>
-      <button id="loadSavedBtn" class="action-btn" type="button">Загрузить список</button>
+      <button id="loadSavedBtn" class="action-btn" type="button">Показать сохранённые списки</button>
+      <span id="savedListInfo" class="saved-list-info">API: 0 списков</span>
       <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
       <button id="imageButton" class="action-btn" type="button">Фото объявлений</button>
     </section>
@@ -2915,6 +2998,7 @@ const analyticsPage = String.raw`<!doctype html>
       stage: document.querySelector('#stage'),
       status: document.querySelector('#status'),
       imageButton: document.querySelector('#imageButton'),
+      savedListInfo: document.querySelector('#savedListInfo'),
       metrics: document.querySelector('#metrics'),
       insights: document.querySelector('#insights'),
       cheapTable: document.querySelector('#cheapTable'),
@@ -3018,6 +3102,15 @@ const analyticsPage = String.raw`<!doctype html>
       const hours = Math.floor(value / 60);
       const minutes = value % 60;
       return (hours ? hours + ' ч ' : '') + minutes + ' мин';
+    }
+
+    function pluralizeRu(count, one, few, many) {
+      const abs = Math.abs(count) % 100;
+      const mod10 = abs % 10;
+      if (abs > 10 && abs < 20) return many;
+      if (mod10 > 1 && mod10 < 5) return few;
+      if (mod10 === 1) return one;
+      return many;
     }
 
     function unwrapJson(value) {
@@ -3541,7 +3634,7 @@ const analyticsPage = String.raw`<!doctype html>
           const rowClass = [isTop ? 'top-row' : '', extraClass].filter(Boolean).join(' ');
           return '<tr' + (rowClass ? ' class="' + esc(rowClass) + '"' : '') + '>' + columns.map((col, columnIndex) => {
             const tag = isTop && columnIndex === 0 ? '<span class="top-tag">Топ-' + (index + 1) + '</span>' : '';
-            return '<td>' + tag + col.render(row, index) + '</td>';
+            return '<td data-label="' + esc(col.label) + '"><div class="cell-inner">' + tag + col.render(row, index) + '</div></td>';
           }).join('') + '</tr>';
         }).join('') +
         '</tbody></table>' +
@@ -3945,11 +4038,19 @@ const analyticsPage = String.raw`<!doctype html>
           updatedAt: data.updatedAt || null,
           items: data.items,
         }] : []);
+        if (els.savedListInfo) {
+          const count = state.savedDatasets.length;
+          els.savedListInfo.textContent = count ? 'API: ' + count + ' ' + pluralizeRu(count, 'список', 'списка', 'списков') : 'API: 0 списков';
+        }
         const selectedId = data.activeId || state.savedDatasets[0]?.id || '';
         const options = ['<option value="">Выбери список</option>']
           .concat(state.savedDatasets.map((dataset) => '<option value="' + esc(dataset.id) + '"' + (dataset.id === selectedId ? ' selected' : '') + '>' + esc(dataset.name) + ' (' + dataset.count + ')</option>'));
         els.savedListSelect.innerHTML = options.join('');
-        if (!state.savedDatasets.length) return;
+        if (!state.savedDatasets.length) {
+          setStatus('В API пока нет сохранённых списков. Можно загрузить JSON вручную или сохранить список через панель.', 'warn');
+          setStage('Сохранённые списки не найдены', 'warn');
+          return;
+        }
         els.savedListSelect.value = selectedId;
         const active = state.savedDatasets.find((dataset) => dataset.id === selectedId) || state.savedDatasets[0];
         if (!active) return;
@@ -3993,7 +4094,7 @@ const analyticsPage = String.raw`<!doctype html>
       loadText(text);
     }
 
-    function handleAnalyze() {
+    async function handleAnalyze() {
       try {
         if (!els.jsonInput.value.trim()) {
           setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
@@ -4001,6 +4102,8 @@ const analyticsPage = String.raw`<!doctype html>
           return;
         }
         setStage('Разбираю вставленный JSON', 'info');
+        setStatus('Идёт загрузка и обработка JSON, подожди немного...', 'info');
+        await new Promise((resolve) => requestAnimationFrame(resolve));
         loadText(els.jsonInput.value);
       } catch (error) {
         state.items = [];
@@ -4218,11 +4321,13 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     els.fileInput.addEventListener('change', handleFile);
-    els.loadSavedBtn.addEventListener('click', loadSelectedSavedList);
+    els.loadSavedBtn.addEventListener('click', () => { void loadSavedAnalyticsData(); });
     els.savedListSelect.addEventListener('change', () => {
-      state.selectedSavedId = els.savedListSelect.value;
+      if (els.savedListSelect.value) {
+        loadSelectedSavedList();
+      }
     });
-    els.analyzeBtn.addEventListener('click', handleAnalyze);
+    els.analyzeBtn.addEventListener('click', () => { void handleAnalyze(); });
     els.imageButton.addEventListener('click', () => { void loadPreviewImages(); });
     els.downloadFavoritesBtn.addEventListener('click', downloadFavoritesJson);
     els.downloadCommuteIssuesBtn.addEventListener('click', downloadCommuteIssuesJson);
