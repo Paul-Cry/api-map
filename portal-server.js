@@ -60,8 +60,13 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/listings" || url.pathname === "/api/import") {
-      await proxy(req, res, services.feed, url.pathname + url.search);
+    if (url.pathname === "/merge") {
+      await proxy(req, res, services.filter, "/merge" + url.search);
+      return;
+    }
+
+    if (url.pathname === "/costs") {
+      await proxy(req, res, services.filter, "/costs" + url.search);
       return;
     }
 
@@ -75,11 +80,6 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/merge") {
-      await proxy(req, res, services.filter, "/merge" + url.search);
-      return;
-    }
-
     if (url.pathname === "/analytics") {
       await proxy(req, res, services.filter, "/analytics" + url.search);
       return;
@@ -90,13 +90,28 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/listings" || url.pathname === "/api/import") {
+      await proxy(req, res, services.feed, url.pathname + url.search);
+      return;
+    }
+
     if (url.pathname === "/api/preview-images") {
+      await proxy(req, res, services.filter, url.pathname + url.search);
+      return;
+    }
+
+    if (url.pathname === "/api/filter-preview" || url.pathname === "/api/filter-run" || url.pathname === "/api/analytics-run") {
       await proxy(req, res, services.filter, url.pathname + url.search);
       return;
     }
 
     if (url.pathname === "/api/analytics-data") {
       await proxy(req, res, services.filter, url.pathname + url.search);
+      return;
+    }
+
+    if (url.pathname === "/api/portal-summary") {
+      sendJson(res, 200, await buildPortalSummary());
       return;
     }
 
@@ -183,6 +198,7 @@ async function proxy(req, res, service, targetPath) {
   delete headers.host;
   delete headers.connection;
   delete headers["content-length"];
+  delete headers.expect;
 
   const body = await readRequestBody(req);
   const upstream = await fetch(target, {
@@ -225,6 +241,111 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
+function sendJson(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
+async function buildPortalSummary() {
+  const [feed, filter, worker] = await Promise.all([
+    readServiceSnapshot(services.feed, "/api/listings"),
+    readServiceSnapshot(services.filter, "/api/analytics-data"),
+    readServiceSnapshot(services.worker, "/api/status"),
+  ]);
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    services: {
+      feed: {
+        name: services.feed.name,
+        baseUrl: `http://127.0.0.1:${services.feed.port}`,
+        route: "/feed",
+        ...feed,
+      },
+      filter: {
+        name: services.filter.name,
+        baseUrl: `http://127.0.0.1:${services.filter.port}`,
+        route: "/filter",
+        ...filter,
+      },
+      worker: {
+        name: services.worker.name,
+        baseUrl: `http://127.0.0.1:${services.worker.port}`,
+        route: "/worker",
+        ...worker,
+      },
+    },
+  };
+}
+
+async function readServiceSnapshot(service, path) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${service.port}${path}`, {
+      signal: controller.signal,
+      redirect: "manual",
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload: summarizePayload(payload, service.name),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error?.name === "AbortError" ? "timeout" : (error?.message || "unavailable"),
+      payload: null,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function summarizePayload(payload, serviceName) {
+  if (serviceName === "Feed" && payload && typeof payload === "object") {
+    const items = Array.isArray(payload.items) ? payload.items.length : 0;
+    return {
+      items,
+      updatedAt: payload.updatedAt || null,
+      sourceFile: payload.sourceFile || null,
+    };
+  }
+
+  if (serviceName === "Filter" && payload && typeof payload === "object") {
+    const items = Array.isArray(payload.items) ? payload.items.length : 0;
+    return {
+      items,
+      count: typeof payload.count === "number" ? payload.count : items,
+      updatedAt: payload.updatedAt || null,
+    };
+  }
+
+  if (serviceName === "Worker API" && payload && typeof payload === "object") {
+    return {
+      workersConnected: payload.workersConnected ?? 0,
+      workersReady: payload.workersReady ?? 0,
+      queuedJobs: payload.queuedJobs ?? 0,
+      workers: Array.isArray(payload.workers) ? payload.workers.length : 0,
+      batches: Array.isArray(payload.batches) ? payload.batches.length : 0,
+    };
+  }
+
+  return payload;
+}
+
 function dashboardPage() {
   return `<!doctype html>
 <html lang="ru">
@@ -233,65 +354,308 @@ function dashboardPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Портал объявлений</title>
   <style>
-    :root{--bg:#f4f6f8;--panel:#fff;--text:#17202a;--muted:#667789;--line:#dce4ee;--accent:#0f6fde;--shadow:0 10px 24px rgba(26,39,58,.07)}
+    :root{
+      --bg:#08111f;
+      --panel:rgba(15,22,37,.92);
+      --text:#eef4ff;
+      --muted:#94a3b8;
+      --line:#223046;
+      --accent:#6ea8ff;
+      --accent-strong:#93c3ff;
+      --good:#5ce0b0;
+      --bad:#ff8a8a;
+      --shadow:0 24px 60px rgba(0,0,0,.35);
+    }
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
-    header{background:#fff;border-bottom:1px solid var(--line)}
-    .wrap{max-width:1120px;margin:0 auto;padding:24px}
-    h1{margin:0 0 6px;font-size:30px;letter-spacing:0}
-    p{margin:0;color:var(--muted);line-height:1.5}
-    main{max-width:1120px;margin:0 auto;padding:20px 24px 40px}
-    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
-    a.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:18px;text-decoration:none;color:var(--text);min-height:150px}
-    a.card:hover{border-color:#b8cbe3;transform:translateY(-1px)}
-    .label{display:inline-flex;align-items:center;height:26px;padding:0 9px;border-radius:999px;background:#edf5ff;color:#164f91;font-weight:800;font-size:12px}
-    h2{margin:14px 0 8px;font-size:20px}
-    .path{margin-top:14px;color:var(--muted);font-size:13px}
-    @media(max-width:980px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:620px){.grid{grid-template-columns:1fr}.wrap,main{padding-left:14px;padding-right:14px}}
+    html,body{min-height:100%}
+    body{
+      margin:0;
+      color:var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(110,168,255,.16), transparent 28%),
+        radial-gradient(circle at top right, rgba(92,224,176,.08), transparent 24%),
+        linear-gradient(180deg, #07101d 0%, #0c1526 100%);
+      font-family:Inter,"Segoe UI",Arial,sans-serif;
+    }
+    a{color:inherit}
+    .shell{max-width:1220px;margin:0 auto;padding:20px 18px 36px}
+    .hero{
+      padding:22px 22px 20px;
+      border:1px solid rgba(110,168,255,.15);
+      border-radius:20px;
+      background:linear-gradient(180deg, rgba(18,29,49,.96), rgba(12,21,38,.96));
+      box-shadow:var(--shadow);
+    }
+    .hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .eyebrow{
+      display:inline-flex;
+      align-items:center;
+      min-height:28px;
+      padding:0 10px;
+      border-radius:999px;
+      background:rgba(110,168,255,.12);
+      color:#dcecff;
+      font-size:12px;
+      font-weight:800;
+      margin-bottom:10px;
+    }
+    h1{margin:0;font-size:34px;line-height:1.05;letter-spacing:-.03em}
+    .hero p{margin:10px 0 0;max-width:820px;color:var(--muted);line-height:1.55}
+    .hero-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .button{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-height:40px;
+      padding:0 14px;
+      border-radius:12px;
+      border:1px solid rgba(110,168,255,.18);
+      background:#111a2b;
+      color:var(--text);
+      text-decoration:none;
+      font-weight:800;
+      white-space:nowrap;
+      cursor:pointer;
+    }
+    .button.primary{background:var(--accent);color:#07101d;border-color:var(--accent)}
+    .button:hover{border-color:rgba(147,195,255,.45)}
+    .button.primary:hover{background:var(--accent-strong)}
+    .section{margin-top:16px}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
+    .section-head h2{margin:0;font-size:18px;letter-spacing:-.01em}
+    .section-head p{margin:0;color:var(--muted);font-size:13px}
+    .status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .status-card{
+      min-height:168px;
+      padding:16px;
+      border:1px solid rgba(110,168,255,.14);
+      border-radius:18px;
+      background:linear-gradient(180deg, rgba(18,29,49,.94), rgba(13,22,38,.94));
+      box-shadow:var(--shadow);
+    }
+    .status-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .status-label{font-size:12px;font-weight:800;color:#cfe0ff;text-transform:uppercase;letter-spacing:.08em}
+    .status-pill{
+      display:inline-flex;
+      align-items:center;
+      min-height:28px;
+      padding:0 10px;
+      border-radius:999px;
+      background:rgba(92,224,176,.12);
+      color:#d8fff3;
+      font-size:12px;
+      font-weight:800;
+    }
+    .status-pill.bad{background:rgba(255,132,132,.12);color:#ffdada}
+    .metric{margin-top:14px;font-size:28px;font-weight:900;letter-spacing:-.03em}
+    .status-meta{margin-top:10px;color:var(--muted);font-size:13px;line-height:1.5;display:grid;gap:6px}
+    .route-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .card{
+      display:block;
+      min-height:162px;
+      padding:18px;
+      border:1px solid rgba(110,168,255,.13);
+      border-radius:18px;
+      background:linear-gradient(180deg, rgba(18,29,49,.96), rgba(13,22,38,.96));
+      box-shadow:var(--shadow);
+      text-decoration:none;
+      color:var(--text);
+      transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease;
+    }
+    .card:hover{transform:translateY(-1px);border-color:rgba(147,195,255,.38)}
+    .label{display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;background:rgba(110,168,255,.12);color:#dcecff;font-size:12px;font-weight:800}
+    .card h3{margin:14px 0 8px;font-size:20px;line-height:1.15}
+    .card p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}
+    .path{margin-top:16px;color:#b9cae4;font-size:12px}
+    .timestamp{color:var(--muted);font-size:12px}
+    @media(max-width:1020px){.status-grid,.route-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:680px){
+      .shell{padding:12px}
+      .hero{padding:16px}
+      h1{font-size:28px}
+      .status-grid,.route-grid{grid-template-columns:1fr}
+      .hero-actions{width:100%}
+      .hero-actions .button{flex:1}
+    }
   </style>
 </head>
 <body>
-  <header>
-    <div class="wrap">
-      <h1>Портал объявлений</h1>
-      <p>Один сервер для ленты, базы объявлений, worker API и фильтра.</p>
-    </div>
-  </header>
-  <main>
-    <div class="grid">
-      <a class="card" href="/feed">
-        <span class="label">Лента</span>
-        <h2>Лента объявлений</h2>
-        <p>Просмотр объектов, цены, условия и время в дороге.</p>
-        <div class="path">/feed</div>
-      </a>
-      <a class="card" href="/admin">
-        <span class="label">База</span>
-        <h2>Панель базы</h2>
-        <p>Загрузка JSON-файлов и управление базой объявлений.</p>
-        <div class="path">/admin</div>
-      </a>
-      <a class="card" href="/worker">
-        <span class="label">Worker</span>
-        <h2>Worker API</h2>
-        <p>Панель управления worker-обработкой и очередями задач.</p>
-        <div class="path">/worker</div>
-      </a>
-      <a class="card" href="/filter">
-        <span class="label">Фильтр</span>
-        <h2>Фильтр объявлений</h2>
-        <p>Фильтрация объектов, превью картинок и экспорт результата.</p>
-        <div class="path">/filter</div>
-      </a>
-      <a class="card" href="/analytics">
-        <span class="label">Аналитика</span>
-        <h2>Аналитика аренды</h2>
-        <p>Загрузка JSON и разбор рынка: средняя цена, медиана, дешёвые и дорогие варианты, баланс и метрики входа.</p>
-        <div class="path">/analytics</div>
-      </a>
-    </div>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="eyebrow">Full stack control center</div>
+          <h1>Портал объявлений</h1>
+          <p>Один вход в ленту, базу объявлений, фильтр, аналитику и worker API. Главная страница показывает живой статус backend-сервисов и ведет в рабочие разделы проекта.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="refreshBtn" class="button primary" type="button">Обновить статус</button>
+          <a class="button" href="/feed">Открыть ленту</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <h2>Живой статус backend</h2>
+          <p>Данные приходят напрямую с внутренних API сервисов.</p>
+        </div>
+        <div id="updatedAt" class="timestamp">Обновление: ...</div>
+      </div>
+      <div id="statusGrid" class="status-grid">
+        <div class="status-card">Загрузка данных...</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <h2>Маршруты приложения</h2>
+          <p>Все ключевые разделы собраны в одном месте.</p>
+        </div>
+      </div>
+      <div class="route-grid">
+        <a class="card" href="/feed">
+          <span class="label">Лента</span>
+          <h3>Просмотр объявлений</h3>
+          <p>Карточки, цены, адреса, время в пути и экспорт данных.</p>
+          <div class="path">/feed</div>
+        </a>
+        <a class="card" href="/admin">
+          <span class="label">База</span>
+          <h3>Панель базы</h3>
+          <p>Загрузка JSON-файлов и хранение списка объявлений на сервере.</p>
+          <div class="path">/admin</div>
+        </a>
+        <a class="card" href="/filter">
+          <span class="label">Фильтр</span>
+          <h3>Фильтрация и экспорт</h3>
+          <p>Отбор объектов, сравнение маршрутов и скачивание результата.</p>
+          <div class="path">/filter</div>
+        </a>
+        <a class="card" href="/worker">
+          <span class="label">Worker</span>
+          <h3>Worker API</h3>
+          <p>Мониторинг подключённых воркеров, задач и batch-процессов.</p>
+          <div class="path">/worker</div>
+        </a>
+        <a class="card" href="/merge">
+          <span class="label">JSON</span>
+          <h3>Объединение файлов</h3>
+          <p>Склейка двух JSON-файлов в один массив без лишней возни.</p>
+          <div class="path">/merge</div>
+        </a>
+        <a class="card" href="/costs">
+          <span class="label">Расходы</span>
+          <h3>Расходы за 3 месяца</h3>
+          <p>Показывает итоговую нагрузку по объекту и сопутствующим платежам.</p>
+          <div class="path">/costs</div>
+        </a>
+        <a class="card" href="/analytics">
+          <span class="label">Аналитика</span>
+          <h3>Арендная аналитика</h3>
+          <p>Статистика по рынку, средние значения, медиана и входные метрики.</p>
+          <div class="path">/analytics</div>
+        </a>
+        <a class="card" href="/analytics-admin">
+          <span class="label">Admin</span>
+          <h3>Панель аналитики</h3>
+          <p>Сохранение и загрузка аналитического JSON с ключом администратора.</p>
+          <div class="path">/analytics-admin</div>
+        </a>
+      </div>
+    </section>
   </main>
+
+  <script>
+    const statusGrid = document.querySelector('#statusGrid');
+    const updatedAt = document.querySelector('#updatedAt');
+    const refreshBtn = document.querySelector('#refreshBtn');
+
+    function fmtDate(value) {
+      if (!value) return 'нет данных';
+      try {
+        return new Date(value).toLocaleString('ru-RU');
+      } catch {
+        return String(value);
+      }
+    }
+
+    function fmtMetric(value) {
+      if (value === null || value === undefined || value === '') return '0';
+      return String(value);
+    }
+
+    function serviceTone(service) {
+      return service.ok ? 'ok' : 'bad';
+    }
+
+    function serviceLabel(service) {
+      if (!service.ok) return service.error || ('HTTP ' + (service.status || 0));
+      return 'HTTP ' + (service.status || 200);
+    }
+
+    function renderServiceCard(title, subtitle, service, metricRows) {
+      return '' +
+        '<article class="status-card">' +
+          '<div class="status-top">' +
+            '<div class="status-label">' + title + '</div>' +
+            '<div class="status-pill ' + serviceTone(service) + '">' + serviceLabel(service) + '</div>' +
+          '</div>' +
+          '<div class="metric">' + subtitle + '</div>' +
+          '<div class="status-meta">' +
+            metricRows.map(function(row) {
+              return '<div>' + row.label + ': <strong>' + row.value + '</strong></div>';
+            }).join('') +
+            '<div>Маршрут: <a href="' + service.route + '">' + service.route + '</a></div>' +
+            '<div>Источник: ' + service.baseUrl + '</div>' +
+          '</div>' +
+        '</article>';
+    }
+
+    async function loadSummary() {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Обновляю...';
+      try {
+        const response = await fetch('/api/portal-summary', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || !data || !data.ok) {
+          throw new Error((data && data.error) || 'Не удалось загрузить статус.');
+        }
+
+        const feed = data.services.feed || {};
+        const filter = data.services.filter || {};
+        const worker = data.services.worker || {};
+
+        statusGrid.innerHTML = [
+          renderServiceCard('Feed', fmtMetric(feed.payload && feed.payload.items) + ' объявлений', feed, [
+            { label: 'Обновлено', value: fmtDate(feed.payload && feed.payload.updatedAt) },
+            { label: 'Файл', value: (feed.payload && feed.payload.sourceFile) || 'нет' },
+          ]),
+          renderServiceCard('Filter', fmtMetric(filter.payload && filter.payload.count) + ' объектов', filter, [
+            { label: 'Обновлено', value: fmtDate(filter.payload && filter.payload.updatedAt) },
+            { label: 'Items', value: fmtMetric(filter.payload && filter.payload.items) },
+          ]),
+          renderServiceCard('Worker API', fmtMetric(worker.payload && worker.payload.workersConnected) + ' workers', worker, [
+            { label: 'Готово', value: fmtMetric(worker.payload && worker.payload.workersReady) },
+            { label: 'Очередь', value: fmtMetric(worker.payload && worker.payload.queuedJobs) },
+          ]),
+        ].join('');
+
+        updatedAt.textContent = 'Обновление: ' + fmtDate(data.generatedAt);
+      } catch (error) {
+        statusGrid.innerHTML = '<div class="status-card">Ошибка загрузки: ' + (error && error.message ? error.message : String(error)) + '</div>';
+        updatedAt.textContent = 'Обновление: не удалось загрузить статус';
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Обновить статус';
+      }
+    }
+
+    refreshBtn.addEventListener('click', loadSummary);
+    loadSummary();
+  </script>
 </body>
 </html>`;
 }

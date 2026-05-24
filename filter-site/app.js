@@ -1,11 +1,39 @@
 ﻿import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+
 const PORT = Number(globalThis.process?.env?.PORT || 4173);
 const MAX_PORT_ATTEMPTS = 10;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const ANALYTICS_DATA_FILE = new URL('./analytics-data.json', import.meta.url);
-const ADMIN_KEY = String(globalThis.process?.env?.ANALYTICS_ADMIN_KEY || globalThis.process?.env?.ADMIN_KEY || '');
+const ADMIN_KEY_FILE = new URL('./.analytics-admin-key', import.meta.url);
+
+function loadAdminKey() {
+  const envKey = String(globalThis.process?.env?.ANALYTICS_ADMIN_KEY || globalThis.process?.env?.ADMIN_KEY || '').trim();
+  if (envKey) return envKey;
+
+  try {
+    if (existsSync(ADMIN_KEY_FILE)) {
+      const fileKey = readFileSync(ADMIN_KEY_FILE, 'utf8').trim();
+      if (fileKey) return fileKey;
+    }
+
+    const generatedKey = `local-${randomBytes(12).toString('hex')}`;
+    writeFileSync(ADMIN_KEY_FILE, `${generatedKey}\n`, 'utf8');
+    return generatedKey;
+  } catch {
+    return '';
+  }
+}
+
+const ADMIN_KEY = loadAdminKey();
+const preferredFilterTimeKeys = ['Родина', 'работа Оли'];
+const ignoredFilterTimeKeyNames = new Set([
+  'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
+  'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
+]);
 
 function htmlResponse(res, html) {
   res.writeHead(200, {
@@ -38,6 +66,668 @@ function readBody(req) {
     req.on('end', () => resolve(body));
     req.on('error', reject);
   });
+}
+
+async function readJsonPayload(req) {
+  const body = await readBody(req);
+  if (!body.length) return {};
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
+}
+
+function esc(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function rub(value) {
+  const number = Number(value || 0);
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(number)) + ' ₽';
+}
+
+function minutesText(value) {
+  if (!Number.isFinite(value)) return 'нет';
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return (hours ? hours + ' ч ' : '') + minutes + ' мин';
+}
+
+function readFilterItemsFromText(text) {
+  const parsed = JSON.parse(text);
+  const items = unwrapItems(parsed);
+  if (!items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    throw new Error('В массиве должны быть только объекты объявлений.');
+  }
+  return items;
+}
+
+function detectFilterTimeKeys(items) {
+  const keys = new Set(items.flatMap((item) => Object.keys(item || {})));
+  const preferred = preferredFilterTimeKeys.filter((key) => keys.has(key));
+  if (preferred.length) return preferred;
+
+  const detected = [...keys].filter((key) => {
+    if (!canAutoDetectFilterTimeKey(key)) return false;
+    const values = items
+      .map((item) => item?.[key])
+      .filter((value) => value !== undefined && value !== null);
+    return values.length > 0 && values.some((value) => {
+      if (typeof value === 'number' && !preferredFilterTimeKeys.includes(key)) return false;
+      return isCompactFilterTimeValue(value);
+    });
+  });
+
+  return [...new Set([...preferred, ...detected])];
+}
+
+function canAutoDetectFilterTimeKey(key) {
+  const normalized = String(key ?? '').trim();
+  if (!normalized) return false;
+  if (preferredFilterTimeKeys.includes(normalized)) return true;
+  if (ignoredFilterTimeKeyNames.has(normalized.toLowerCase())) return false;
+  return /время|маршрут|дорог|путь|работ|родин|ол|никит|time|route/i.test(normalized);
+}
+
+function isCompactFilterTimeValue(value) {
+  if (!Number.isFinite(parseTransitMinutes(value))) return false;
+  if (typeof value === 'number') return true;
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  return text.length <= 32 && words.length <= 6;
+}
+
+function parseTransitMinutes(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  const text = String(value ?? '').toLowerCase().replace(',', '.');
+  if (!text || text.includes('ошиб') || text.includes('не найден')) return Number.POSITIVE_INFINITY;
+
+  const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:ч|час|С‡|С‡Р°СЃ)/);
+  const minuteMatch = text.match(/(\d+)\s*(?:мин|м\b|РјРёРЅ|Рј\b)/);
+  const numberOnly = text.match(/^\s*(\d+)\s*$/);
+  const total = (hourMatch ? Number(hourMatch[1]) * 60 : 0) + (minuteMatch ? Number(minuteMatch[1]) : 0);
+
+  if (total > 0) return Math.round(total);
+  if (numberOnly) return Number(numberOnly[1]);
+  return Number.POSITIVE_INFINITY;
+}
+
+function buildDefaultTimeLimits(timeKeys) {
+  return Object.fromEntries(timeKeys.map((key) => [key, 60]));
+}
+
+function normalizeTimeLimits(timeLimits, timeKeys) {
+  const next = {};
+  const defaultLimit = 60;
+  for (const key of timeKeys) {
+    const current = Number(timeLimits?.[key]);
+    next[key] = Number.isFinite(current) && current > 0 ? current : defaultLimit;
+  }
+  return next;
+}
+
+function parseTerms(value) {
+  return String(value ?? '')
+    .split(/[\n,;]+/g)
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function matchesExcludedTitle(item, excludeTerms) {
+  if (!excludeTerms.length) return false;
+  const title = String(getFilterTitle(item)).toLowerCase();
+  return excludeTerms.some((term) => title.includes(term));
+}
+
+function getFilterTitle(item) {
+  return item.title || item.name || item.название || 'Без названия';
+}
+
+function getFilterPrice(item) {
+  return item.price || item.цена || '';
+}
+
+function getFilterLink(item) {
+  const value = item.url || item.URL || item.link || item.href || item.avitoUrl || '';
+  if (typeof value !== 'string') return '';
+  if (value.startsWith('//')) return `https:${value}`;
+  if (value.startsWith('/')) return `https://www.avito.ru${value}`;
+  return value;
+}
+
+function getBestTimeMinutes(item, timeKeys) {
+  if (!timeKeys.length) return Number.POSITIVE_INFINITY;
+  let best = Number.POSITIVE_INFINITY;
+  for (const key of timeKeys) {
+    const minutes = parseTransitMinutes(item[key]);
+    if (Number.isFinite(minutes) && minutes < best) best = minutes;
+  }
+  return best;
+}
+
+function sortFilterItems(items, sortMode, timeKeys) {
+  const sorted = items.slice();
+  sorted.sort((a, b) => {
+    if (sortMode === 'price') {
+      const priceDelta = parsePrice(getFilterPrice(a)) - parsePrice(getFilterPrice(b));
+      if (priceDelta !== 0) return priceDelta;
+      const timeDelta = getBestTimeMinutes(a, timeKeys) - getBestTimeMinutes(b, timeKeys);
+      if (timeDelta !== 0) return timeDelta;
+    } else {
+      const timeDelta = getBestTimeMinutes(a, timeKeys) - getBestTimeMinutes(b, timeKeys);
+      if (timeDelta !== 0) return timeDelta;
+      const priceDelta = parsePrice(getFilterPrice(a)) - parsePrice(getFilterPrice(b));
+      if (priceDelta !== 0) return priceDelta;
+    }
+    const titleA = String(getFilterTitle(a)).toLowerCase();
+    const titleB = String(getFilterTitle(b)).toLowerCase();
+    return titleA.localeCompare(titleB, 'ru');
+  });
+  return sorted;
+}
+
+function parsePrice(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return Number.POSITIVE_INFINITY;
+  const digits = text.replace(/[^\d,.-]/g, '').replace(',', '.');
+  const number = Number(digits);
+  if (Number.isFinite(number)) return number;
+  const match = text.match(/(\d[\d\s]*)/);
+  if (!match) return Number.POSITIVE_INFINITY;
+  const compact = match[1].replace(/\s+/g, '');
+  return Number(compact);
+}
+
+function applyFilterServer(items, { timeKeys, timeLimits, excludeTerms, sortMode }) {
+  let filtered = items;
+  if (timeKeys.length) {
+    filtered = filtered.filter((item) => timeKeys.every((key) => {
+      const limit = Number(timeLimits[key]);
+      return parseTransitMinutes(item[key]) <= limit;
+    }));
+  }
+  filtered = filtered.filter((item) => !matchesExcludedTitle(item, excludeTerms));
+  return sortFilterItems(filtered, sortMode, timeKeys);
+}
+
+function buildFilterStatusText(timeKeys, timeLimits, excludeTerms, visibleCount, totalCount) {
+  const limitText = timeKeys.map((key) => `${key} до ${timeLimits[key]} мин`).join(', ');
+  const excludedText = excludeTerms.length ? ` исключения: ${excludeTerms.join(', ')}` : '';
+  return `Фильтр: ${limitText}${excludedText}: ${visibleCount} из ${totalCount}`;
+}
+
+function detectAnalyticsTimeKeys(items) {
+  const ignored = new Set([
+    'title', 'name', 'название', 'adress', 'address', 'адрес', 'price', 'цена',
+    'url', 'link', 'href', 'description', 'dop', 'image', 'months',
+    'rent_per_month', 'rent_for_period', 'commission_percent', 'commission',
+    'deposit', 'total_for_period',
+  ]);
+  const keys = [];
+  items.slice(0, 80).forEach((item) => {
+    Object.keys(item || {}).forEach((key) => {
+      const lower = key.toLowerCase();
+      if (ignored.has(lower) || keys.includes(key)) return;
+      const value = item[key];
+      const text = String(value ?? '').toLowerCase();
+      const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|time|route/.test(lower);
+      const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
+      if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
+        if (typeof value === 'number' && !looksLikeRoute) return;
+        keys.push(key);
+      }
+    });
+  });
+  return keys.sort((a, b) => {
+    const score = (key) => /оли|ol/i.test(key) ? -2 : /родина|никит|nik/i.test(key) ? -1 : 0;
+    return score(a) - score(b) || a.localeCompare(b, 'ru');
+  });
+}
+
+function parseTime(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value ?? '').toLowerCase();
+  if (!text.trim()) return Infinity;
+  let total = 0;
+  const day = text.match(/(\d+)\s*(?:д|дн|день|дня)/);
+  const hour = text.match(/(\d+)\s*(?:ч|час|часа|часов|h)/);
+  const min = text.match(/(\d+)\s*(?:м|мин|minute|min)/);
+  if (day) total += Number(day[1]) * 1440;
+  if (hour) total += Number(hour[1]) * 60;
+  if (min) total += Number(min[1]);
+  if (!total) {
+    const onlyNumber = text.match(/^\s*(\d+)\s*$/);
+    if (onlyNumber) total = Number(onlyNumber[1]);
+  }
+  return total || Infinity;
+}
+
+function chooseAnalyticsKey(preferredKey, timeKeys, matcher) {
+  if (preferredKey && timeKeys.includes(preferredKey)) return preferredKey;
+  const match = timeKeys.find((key) => matcher.test(key));
+  return match || timeKeys[0] || '';
+}
+
+function getAnalyticsTitle(item) {
+  return String(item?.title ?? item?.name ?? item?.название ?? 'Без названия');
+}
+
+function getAnalyticsAddress(item) {
+  return String(item?.adress ?? item?.address ?? item?.адрес ?? '');
+}
+
+function getAnalyticsUrl(item) {
+  return String(item?.url ?? item?.link ?? item?.href ?? '');
+}
+
+function parseMoney(value) {
+  if (typeof value === 'number') return value;
+  const text = String(value ?? '').replace(/\s+/g, ' ');
+  const match = text.match(/(\d[\d\s.,]*)/);
+  if (!match) return 0;
+  return Number(match[1].replace(/[^\d]/g, '')) || 0;
+}
+
+function parseArea(item) {
+  const text = [item?.title, item?.name, item?.description].filter(Boolean).join(' ');
+  const match = text.match(/(\d+(?:[,.]\d+)?)\s*м[²2]/i);
+  return match ? Number(match[1].replace(',', '.')) : 0;
+}
+
+function parseRooms(item) {
+  const text = [item?.title, item?.name].filter(Boolean).join(' ').toLowerCase();
+  const studio = /студ/.test(text);
+  if (studio) return 0;
+  const match = text.match(/(\d+)\s*[- ]?\s*(?:к|комн)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function parseFloorInfo(item) {
+  const text = [item?.title, item?.name].filter(Boolean).join(' ');
+  const match = text.match(/(\d+)\s*\/\s*(\d+)\s*(?:эт|этаж)/i);
+  if (!match) return { floor: null, totalFloors: null, category: 'этаж не найден' };
+  const floor = Number(match[1]);
+  const totalFloors = Number(match[2]);
+  let category = 'средний этаж';
+  if (floor === totalFloors) category = 'последний этаж';
+  else if (floor <= 3) category = 'низкий этаж';
+  else if (totalFloors && floor / totalFloors >= 0.7) category = 'высокий этаж';
+  return { floor, totalFloors, category };
+}
+
+function areaCategory(area) {
+  if (!area) return 'площадь не найдена';
+  if (area < 35) return 'маленькая';
+  if (area < 45) return 'нормальная';
+  if (area < 60) return 'просторная';
+  return 'большая';
+}
+
+function getRent(item) {
+  return Number(item?.rent_per_month) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
+}
+
+function getMonths(item) {
+  const months = Number(item?.months);
+  return Number.isFinite(months) && months > 0 ? months : 3;
+}
+
+function getTotal(item, rent, months) {
+  const total = Number(item?.total_for_period);
+  if (Number.isFinite(total) && total > 0) return total;
+  const partsTotal = Number(item?.rent_for_period || 0) + Number(item?.commission || 0) + Number(item?.deposit || 0);
+  if (Number.isFinite(partsTotal) && partsTotal > 0) return partsTotal;
+  return rent * months;
+}
+
+function getCommission(item) {
+  const commission = Number(item?.commission);
+  if (Number.isFinite(commission) && commission >= 0) return commission;
+  const percent = Number(item?.commission_percent);
+  const rent = getRent(item);
+  if (Number.isFinite(percent) && percent > 0 && rent > 0) return rent * percent / 100;
+  return 0;
+}
+
+function getDeposit(item) {
+  const deposit = Number(item?.deposit);
+  return Number.isFinite(deposit) && deposit > 0 ? deposit : 0;
+}
+
+function moveInCategory(startPayment, rent) {
+  if (!rent) return 'нет данных';
+  if (startPayment <= rent * 1.5) return 'дешёвый вход';
+  if (startPayment <= rent * 2.5) return 'средний вход';
+  return 'дорогой вход';
+}
+
+function balanceType(olya, nikita) {
+  if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
+  const diff = Math.abs(olya - nikita);
+  if (diff === 0) return 'одинаково';
+  const side = olya < nikita ? 'Оле быстрее' : 'Никите быстрее';
+  if (diff <= 15) return 'почти одинаково, ' + side;
+  if (diff <= 30) return 'разница 16-30 мин, ' + side;
+  if (diff <= 60) return 'разница 31-60 мин, ' + side;
+  return 'разница больше 60 мин, ' + side;
+}
+
+function average(values) {
+  const good = values.filter((value) => Number.isFinite(value));
+  return good.length ? good.reduce((sum, value) => sum + value, 0) / good.length : 0;
+}
+
+function median(values) {
+  const good = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!good.length) return 0;
+  const mid = Math.floor(good.length / 2);
+  return good.length % 2 ? good[mid] : (good[mid - 1] + good[mid]) / 2;
+}
+
+function percentile(values, ratio) {
+  const good = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!good.length) return 0;
+  return good[Math.min(good.length - 1, Math.floor((good.length - 1) * ratio))];
+}
+
+function scoreLower(value, best, worst) {
+  if (!Number.isFinite(value)) return null;
+  if (!Number.isFinite(best) || !Number.isFinite(worst) || best === worst) return 100;
+  return Math.round(Math.max(0, Math.min(100, 100 - ((value - best) / (worst - best)) * 100)));
+}
+
+function scoreHigher(value, best, worst) {
+  if (!Number.isFinite(value) || !value) return null;
+  if (!Number.isFinite(best) || !Number.isFinite(worst) || best === worst) return 100;
+  return Math.round(Math.max(0, Math.min(100, ((value - best) / (worst - best)) * 100)));
+}
+
+function avgScore(values) {
+  const good = values.filter((value) => Number.isFinite(value));
+  return good.length ? Math.round(good.reduce((sum, value) => sum + value, 0) / good.length) : 0;
+}
+
+function gradeLabel(score) {
+  if (score >= 85) return 'отлично';
+  if (score >= 70) return 'хорошо';
+  if (score >= 50) return 'нормально';
+  if (score >= 30) return 'слабо';
+  return 'плохо';
+}
+
+function getPeriodLabel(rows) {
+  const months = [...new Set(rows.map((row) => row.months).filter(Boolean))];
+  if (months.length === 1) return 'за ' + months[0] + ' мес.';
+  return 'за период';
+}
+
+function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) {
+  const baseRows = items.map((item, index) => {
+    const rent = getRent(item);
+    const months = getMonths(item);
+    const total = getTotal(item, rent, months);
+    const area = parseArea(item);
+    const rooms = parseRooms(item);
+    const floorInfo = parseFloorInfo(item);
+    const olya = parseTime(item[olyaKey]);
+    const nikita = parseTime(item[nikitaKey]);
+    const avgCommute = Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity;
+    const maxCommute = Math.max(olya, nikita);
+    const diffTime = Math.abs(olya - nikita);
+    const commission = getCommission(item);
+    const deposit = getDeposit(item);
+    const startPayment = rent + commission + deposit;
+    const priceM2 = area ? rent / area : 0;
+    const dailyRent = rent / 30;
+    const rubPerCommuteMin = Number.isFinite(avgCommute) && avgCommute > 0 ? rent / avgCommute : 0;
+    return {
+      index,
+      item,
+      title: getAnalyticsTitle(item),
+      address: getAnalyticsAddress(item),
+      url: getAnalyticsUrl(item),
+      rent,
+      total,
+      months,
+      area,
+      rooms,
+      floor: floorInfo.floor,
+      totalFloors: floorInfo.totalFloors,
+      floorCategory: floorInfo.category,
+      areaCategory: areaCategory(area),
+      commission,
+      deposit,
+      startPayment,
+      overpaymentPercent: rent ? (startPayment / rent) * 100 : 0,
+      moveInCostCategory: moveInCategory(startPayment, rent),
+      priceM2,
+      dailyRent,
+      rubPerCommuteMin,
+      olya,
+      nikita,
+      avgCommute,
+      maxCommute,
+      diffTime,
+      balanceType: balanceType(olya, nikita),
+    };
+  }).filter((row) => row.rent > 0);
+
+  const ranges = {
+    rentMin: Math.min(...baseRows.map((row) => row.rent)),
+    rentMax: Math.max(...baseRows.map((row) => row.rent)),
+    priceM2Min: Math.min(...baseRows.map((row) => row.priceM2).filter(Boolean)),
+    priceM2Max: Math.max(...baseRows.map((row) => row.priceM2).filter(Boolean)),
+    avgMin: Math.min(...baseRows.map((row) => row.avgCommute).filter(Number.isFinite)),
+    avgMax: Math.max(...baseRows.map((row) => row.avgCommute).filter(Number.isFinite)),
+    diffMin: Math.min(...baseRows.map((row) => row.diffTime).filter(Number.isFinite)),
+    diffMax: Math.max(...baseRows.map((row) => row.diffTime).filter(Number.isFinite)),
+    areaMin: Math.min(...baseRows.map((row) => row.area).filter(Boolean)),
+    areaMax: Math.max(...baseRows.map((row) => row.area).filter(Boolean)),
+    startMin: Math.min(...baseRows.map((row) => row.startPayment).filter(Number.isFinite)),
+    startMax: Math.max(...baseRows.map((row) => row.startPayment).filter(Number.isFinite)),
+  };
+
+  const rows = baseRows.map((row) => {
+    const rentScore = scoreLower(row.rent, ranges.rentMin, ranges.rentMax);
+    const priceM2Score = row.priceM2 ? scoreLower(row.priceM2, ranges.priceM2Min, ranges.priceM2Max) : null;
+    const commuteScore = scoreLower(row.avgCommute, ranges.avgMin, ranges.avgMax);
+    const balanceScore = scoreLower(row.diffTime, ranges.diffMin, ranges.diffMax);
+    const areaScore = row.area ? scoreHigher(row.area, ranges.areaMin, ranges.areaMax) : null;
+    const startPaymentScore = scoreLower(row.startPayment, ranges.startMin, ranges.startMax);
+    const finalScore = avgScore([rentScore, priceM2Score, commuteScore, balanceScore, areaScore, startPaymentScore]);
+
+    return {
+      ...row,
+      rentScore,
+      priceM2Score,
+      commuteScore,
+      balanceScore,
+      areaScore,
+      startPaymentScore,
+      finalScore,
+      grade: gradeLabel(finalScore),
+    };
+  });
+
+  const periodLabel = getPeriodLabel(rows);
+  const rents = rows.map((row) => row.rent);
+  const totals = rows.map((row) => row.total);
+  const m2 = rows.map((row) => row.priceM2).filter(Boolean);
+  const startPayments = rows.map((row) => row.startPayment);
+  const olyaTimes = rows.map((row) => row.olya);
+  const nikitaTimes = rows.map((row) => row.nikita);
+  const avgTimes = rows.map((row) => row.avgCommute);
+  const diffTimes = rows.map((row) => row.diffTime);
+  const rubPerMinute = rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
+  const fastBoth = rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
+
+  const metrics = [
+    ['Объектов', rows.length, 'с распознанной ценой'],
+    ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
+    ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
+    ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
+    ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
+    ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
+    ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
+    ['Среднее до Оли', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
+    ['Среднее до Никиты', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
+    ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
+    ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
+    ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
+    ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
+    ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+    ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
+    ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
+  ].map(([label, value, note]) => ({ label, value, note }));
+
+  const cheapest = rows.slice().sort((a, b) => a.rent - b.rent)[0];
+  const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
+  const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
+  const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
+  const insights = [
+    ['Самый дешёвый', cheapest ? rub(cheapest.rent) + '<br>' + esc(cheapest.title) : 'нет данных'],
+    ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
+    ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+    ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
+  ].map(([title, body]) => ({ title, body }));
+
+  const baseColumns = [
+    { label: 'Объект' },
+    { label: 'Аренда' },
+    { label: 'Цена за м²' },
+    { label: 'Итого ' + periodLabel },
+    { label: 'До Оли' },
+    { label: 'До Никиты' },
+  ];
+
+  const cheap = rows.slice().sort((a, b) => a.rent - b.rent);
+  const expensiveRows = rows.slice().sort((a, b) => b.rent - a.rent);
+  const olya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
+  const nikita = rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+  const balancedRows = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
+  const score = rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
+  const value = rows.filter((row) => row.priceM2 > 0).sort((a, b) => a.priceM2 - b.priceM2 || a.rent - b.rent);
+  const start = rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
+  const minute = rows.filter((row) => row.rubPerCommuteMin > 0).sort((a, b) => a.rubPerCommuteMin - b.rubPerCommuteMin || a.avgCommute - b.avgCommute);
+
+  const tableRows = {
+    cheap,
+    expensive: expensiveRows,
+    olya,
+    nikita,
+    balanced: balancedRows,
+    score,
+    value,
+    start,
+    minute,
+    buckets: buildAnalyticsBuckets(rows),
+    categories: buildAnalyticsCategories(rows),
+  };
+
+  const tableColumns = {
+    cheap: baseColumns,
+    expensive: baseColumns,
+    olya: baseColumns,
+    nikita: baseColumns,
+    balanced: [...baseColumns, { label: 'Баланс' }],
+    score: [...baseColumns, { label: 'Оценка' }],
+    value: [...baseColumns, { label: 'Оценка' }],
+    start: [...baseColumns, { label: 'Стартовый платёж' }],
+    minute: [...baseColumns, { label: '₽/мин пути' }],
+    buckets: [
+      { label: 'Группа' },
+      { label: 'Маршрут' },
+      { label: 'Кол-во' },
+      { label: 'Средняя аренда' },
+      { label: 'Медиана' },
+    ],
+    categories: [
+      { label: 'Тип' },
+      { label: 'Категория' },
+      { label: 'Кол-во' },
+      { label: 'Средняя аренда' },
+      { label: 'Медиана аренды' },
+      { label: 'Средний вход' },
+      { label: 'Средняя разница' },
+    ],
+  };
+
+  const tableHighlights = { cheap: 8, expensive: 8, olya: 10, nikita: 10, balanced: 10, score: 10, value: 10, start: 10, minute: 10 };
+
+  return {
+    timeKeys,
+    olyaKey,
+    nikitaKey,
+    fastLimit,
+    rows,
+    metrics,
+    insights,
+    tableRows,
+    tableColumns,
+    tableHighlights,
+    periodLabel,
+  };
+}
+
+function buildAnalyticsBuckets(rows) {
+  const groups = [
+    ['до 60 мин', (row, key) => row[key] <= 60],
+    ['60-90 мин', (row, key) => row[key] > 60 && row[key] <= 90],
+    ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
+    ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
+  ];
+  const keys = [
+    ['Оля', 'olya'],
+    ['Никита', 'nikita'],
+    ['Оба маршрута', 'both'],
+  ];
+  const result = [];
+  groups.forEach((group) => {
+    keys.forEach((key) => {
+      const list = key[1] === 'both'
+        ? rows.filter((row) => group[1](row, 'olya') && group[1](row, 'nikita'))
+        : rows.filter((row) => group[1](row, key[1]));
+      result.push({
+        group: group[0],
+        route: key[0],
+        count: list.length,
+        avg: average(list.map((row) => row.rent)),
+        median: median(list.map((row) => row.rent)),
+      });
+    });
+  });
+  return result;
+}
+
+function buildAnalyticsCategories(rows) {
+  const categories = [];
+  const addCategoryRows = (title, field) => {
+    [...new Set(rows.map((row) => row[field]))].sort((a, b) => String(a).localeCompare(String(b), 'ru')).forEach((name) => {
+      const list = rows.filter((row) => row[field] === name);
+      categories.push({
+        type: title,
+        name,
+        count: list.length,
+        avg: average(list.map((row) => row.rent)),
+        median: median(list.map((row) => row.rent)),
+        avgStart: average(list.map((row) => row.startPayment)),
+        avgDiff: average(list.map((row) => row.diffTime)),
+      });
+    });
+  };
+  addCategoryRows('Баланс', 'balanceType');
+  addCategoryRows('Стартовый платёж', 'moveInCostCategory');
+  return categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count);
 }
 
 function getListingUrl(item) {
@@ -180,6 +870,69 @@ async function handleSaveAnalyticsData(req, res) {
     ok: true,
     count: items.length,
     updatedAt: saved.updatedAt,
+  });
+}
+
+async function handleFilterPreview(req, res) {
+  const payload = await readJsonPayload(req);
+  const text = typeof payload === 'string' ? payload : String(payload?.text ?? '');
+  const fileName = typeof payload === 'object' && payload?.fileName ? String(payload.fileName) : 'objects.json';
+  const items = readFilterItemsFromText(text);
+  const timeKeys = detectFilterTimeKeys(items);
+
+  jsonResponse(res, 200, {
+    ok: true,
+    fileName,
+    items,
+    count: items.length,
+    timeKeys,
+    timeLimits: buildDefaultTimeLimits(timeKeys),
+  });
+}
+
+async function handleFilterRun(req, res) {
+  const payload = await readJsonPayload(req);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const sortMode = payload?.sortMode === 'price' ? 'price' : 'time';
+  const excludeTerms = Array.isArray(payload?.excludeTerms)
+    ? payload.excludeTerms.map((term) => String(term ?? '').trim().toLowerCase()).filter(Boolean)
+    : parseTerms(payload?.excludeTitle ?? '');
+  const timeKeys = Array.isArray(payload?.timeKeys) ? payload.timeKeys.filter(Boolean) : detectFilterTimeKeys(items);
+  const timeLimits = normalizeTimeLimits(payload?.timeLimits, timeKeys);
+  const visibleItems = applyFilterServer(items, { timeKeys, timeLimits, excludeTerms, sortMode });
+
+  jsonResponse(res, 200, {
+    ok: true,
+    items,
+    count: items.length,
+    visibleItems,
+    visibleCount: visibleItems.length,
+    timeKeys,
+    timeLimits,
+    excludeTerms,
+    sortMode,
+    statusText: buildFilterStatusText(timeKeys, timeLimits, excludeTerms, visibleItems.length, items.length),
+  });
+}
+
+async function handleAnalyticsRun(req, res) {
+  const payload = await readJsonPayload(req);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const fastLimit = Number.isFinite(Number(payload?.fastLimit)) ? Number(payload.fastLimit) : 90;
+  const timeKeys = Array.isArray(payload?.timeKeys) && payload.timeKeys.length
+    ? payload.timeKeys.filter(Boolean)
+    : detectAnalyticsTimeKeys(items);
+  const olyaKey = chooseAnalyticsKey(payload?.olyaKey, timeKeys, /оли|ol/i);
+  const nikitaKey = chooseAnalyticsKey(payload?.nikitaKey, timeKeys, /родина|никит|nik/i);
+  const analytics = buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys });
+
+  jsonResponse(res, 200, {
+    ok: true,
+    items,
+    timeKeys: analytics.timeKeys,
+    selectedKeys: { olyaKey: analytics.olyaKey, nikitaKey: analytics.nikitaKey },
+    fastLimit: analytics.fastLimit,
+    ...analytics,
   });
 }
 
@@ -1388,6 +2141,133 @@ const page = String.raw`<!doctype html>
       log('Журнал очищен.', 'info');
     }
 
+    async function loadFilterPreviewFromServer(text, fileName) {
+      const response = await fetch('/api/filter-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, fileName }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось разобрать JSON на сервере.');
+
+      state.rawText = text;
+      state.fileName = data.fileName || fileName || '';
+      state.allItems = Array.isArray(data.items) ? data.items : [];
+      state.timeKeys = Array.isArray(data.timeKeys) ? data.timeKeys : [];
+      state.timeLimits = data.timeLimits || {};
+      state.excludeTerms = parseTerms(els.excludeTitle.value);
+      renderTimeFilters();
+      state.sortMode = els.sortMode.value;
+      state.visibleItems = state.allItems.slice();
+      renderCards(state.visibleItems);
+      updateSummary();
+      updateActionsState();
+      const timeText = state.timeKeys.length ? 'Найдены поля времени: ' + state.timeKeys.map(displayText).join(', ') : 'Поля времени не найдены';
+      setStatus('Загружено объектов: ' + state.allItems.length + '. ' + timeText, state.timeKeys.length ? 'ok' : 'warn');
+      log('JSON распарсен сервером: ' + state.allItems.length + ' объектов.', 'ok');
+      log(timeText + '.', state.timeKeys.length ? 'ok' : 'warn');
+    }
+
+    async function runFilterOnServer() {
+      if (!state.allItems.length) {
+        setStatus('Сначала загрузи JSON.', 'warn');
+        log('Фильтр не применён: данных ещё нет.', 'warn');
+        return;
+      }
+
+      readTimeLimitsFromInputs();
+      const invalidTimeKeys = getInvalidTimeLimits();
+      if (invalidTimeKeys.length) {
+        const names = invalidTimeKeys.map(displayText).join(', ');
+        setStatus('Проверь лимиты времени для полей: ' + names, 'bad');
+        log('Фильтр не применён: неверные лимиты для полей ' + names + '.', 'warn');
+        return;
+      }
+
+      const response = await fetch('/api/filter-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: state.allItems,
+          timeKeys: state.timeKeys,
+          timeLimits: state.timeLimits,
+          excludeTerms: parseTerms(els.excludeTitle.value),
+          sortMode: els.sortMode.value,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось отфильтровать данные.');
+
+      state.visibleItems = Array.isArray(data.visibleItems) ? data.visibleItems : [];
+      state.sortMode = data.sortMode || els.sortMode.value;
+      renderCards(state.visibleItems);
+      updateSummary();
+      updateActionsState();
+      setStatus(data.statusText || ('Фильтр: ' + state.visibleItems.length + ' из ' + state.allItems.length), 'ok');
+      log('Фильтр применён на сервере: осталось ' + state.visibleItems.length + ' из ' + state.allItems.length, 'ok');
+    }
+
+    async function handleFileInput() {
+      const file = els.fileInput.files?.[0];
+      if (!file) return;
+
+      try {
+        log('Выбран файл: ' + file.name + ' (' + file.size + ' байт).', 'info');
+        const text = await file.text();
+        await loadFilterPreviewFromServer(text, file.name);
+      } catch (error) {
+        const message = error?.message || String(error);
+        setStatus('Не удалось прочитать файл: ' + message, 'bad');
+        log('Ошибка чтения файла: ' + message, 'bad');
+      }
+    }
+
+    async function handleShow() {
+      if (!state.rawText) {
+        const file = els.fileInput.files?.[0];
+        if (file) {
+          await handleFileInput();
+          return;
+        }
+        setStatus('Сначала выбери JSON-файл.', 'warn');
+        log('Нажата кнопка "Показать карточки", но файл не выбран.', 'warn');
+        return;
+      }
+
+      try {
+        await loadFilterPreviewFromServer(state.rawText, state.fileName || 'текущий JSON');
+      } catch (error) {
+        const message = error?.message || String(error);
+        setStatus('JSON не загружен: ' + message, 'bad');
+        log('Ошибка загрузки JSON: ' + message, 'bad');
+      }
+    }
+
+    async function handleFilter(options = {}) {
+      try {
+        await runFilterOnServer();
+        if (options.fetchImages) {
+          void loadPreviewImages({ silent: true });
+        }
+      } catch (error) {
+        const message = error?.message || String(error);
+        setStatus('Фильтр не применён: ' + message, 'bad');
+        log('Ошибка фильтрации: ' + message, 'bad');
+      }
+    }
+
+    function handleReset() {
+      if (!state.allItems.length) return;
+      state.visibleItems = state.allItems.slice();
+      state.sortMode = els.sortMode.value;
+      renderTimeFilters();
+      renderCards(state.visibleItems);
+      updateSummary();
+      updateActionsState();
+      setStatus('Показаны все объекты: ' + state.allItems.length, 'ok');
+      log('Сброс фильтра, показаны все объекты.', 'info');
+    }
+
     els.fileInput.addEventListener('change', handleFileInput);
     els.showButton.addEventListener('click', handleShow);
     els.filterButton.addEventListener('click', () => handleFilter({ fetchImages: true }));
@@ -1399,19 +2279,19 @@ const page = String.raw`<!doctype html>
     els.sortMode.addEventListener('change', () => {
       state.sortMode = els.sortMode.value;
       if (!state.allItems.length) return;
-      renderCards(state.visibleItems);
+      void handleFilter();
       log('Сортировка изменена на "' + els.sortMode.value + '".', 'info');
     });
     els.excludeTitle.addEventListener('change', () => {
-      if (state.allItems.length) handleFilter();
+      if (state.allItems.length) void handleFilter();
     });
     els.excludeTitle.addEventListener('keyup', (event) => {
-      if (event.key === 'Enter' && state.allItems.length) handleFilter();
+      if (event.key === 'Enter' && state.allItems.length) void handleFilter();
     });
     els.timeFilters.addEventListener('input', (event) => {
       if (!event.target.classList.contains('time-limit-input')) return;
       readTimeLimitsFromInputs();
-      if (state.allItems.length) handleFilter();
+      if (state.allItems.length) void handleFilter();
     });
 
     log('Интерфейс готов.', 'ok');
@@ -1737,7 +2617,7 @@ const analyticsPage = String.raw`<!doctype html>
       minute: 'Все варианты по ₽ за минуту пути',
     };
 
-    const state = { items: [], rows: [], timeKeys: [], tableRows: {}, tableColumns: {}, tableHighlights: {} };
+    const state = { items: [], rows: [], timeKeys: [], tableRows: {}, tableColumns: {}, tableHighlights: {}, analyticsView: null };
 
     function esc(value) {
       return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -2352,11 +3232,213 @@ const analyticsPage = String.raw`<!doctype html>
       }
     }
 
+    function buildAnalyticsColumns(tableKey) {
+      const periodLabel = state.analyticsView?.periodLabel || 'за период';
+      const baseColumns = [
+        { label: 'Объект', render: listingCell },
+        { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
+        { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
+        { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
+        { label: 'До Оли', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        { label: 'До Никиты', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+      ];
+
+      const tableColumns = {
+        cheap: baseColumns,
+        expensive: baseColumns,
+        olya: baseColumns,
+        nikita: baseColumns,
+        balanced: [...baseColumns, { label: 'Баланс', render: (row) => '<span class="badge">разница ' + minutesText(row.diffTime) + '</span>' }],
+        score: [...baseColumns, { label: 'Оценка', render: (row) => '<span class="badge">' + row.finalScore + '/100 · ' + esc(row.grade) + '</span>' }],
+        value: [...baseColumns, { label: 'Оценка', render: (row) => '<span class="badge">' + row.finalScore + '/100 · ' + esc(row.grade) + '</span>' }],
+        start: [...baseColumns, { label: 'Стартовый платёж', render: (row) => '<span class="money">' + rub(row.startPayment) + '</span><div class="muted">' + esc(row.moveInCostCategory) + '</div>' }],
+        minute: [...baseColumns, { label: '₽/мин пути', render: (row) => '<span class="money">' + rub(row.rubPerCommuteMin) + '</span><div class="muted">аренда / ' + esc(minutesText(Math.round(row.avgCommute))) + '</div>' }],
+      };
+
+      return tableColumns[tableKey] || baseColumns;
+    }
+
+    function applyAnalyticsView(data) {
+      state.analyticsView = data;
+      state.items = Array.isArray(data?.items) ? data.items : state.items;
+      state.rows = Array.isArray(data?.rows) ? data.rows : [];
+      state.timeKeys = Array.isArray(data?.timeKeys) ? data.timeKeys : [];
+      state.tableRows = data?.tableRows || {};
+      state.tableColumns = data?.tableColumns || {};
+      state.tableHighlights = data?.tableHighlights || {};
+
+      if (Array.isArray(data?.timeKeys) && data.timeKeys.length) {
+        fillTimeSelects();
+        if (data.selectedKeys?.olyaKey) els.olyaKey.value = data.selectedKeys.olyaKey;
+        if (data.selectedKeys?.nikitaKey) els.nikitaKey.value = data.selectedKeys.nikitaKey;
+      }
+
+      renderAll();
+    }
+
+    async function loadAnalyticsView(items) {
+      const response = await fetch('/api/analytics-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items,
+          timeKeys: state.timeKeys,
+          olyaKey: els.olyaKey.value,
+          nikitaKey: els.nikitaKey.value,
+          fastLimit: Number(els.fastLimit.value || 90),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось построить аналитику на сервере.');
+      applyAnalyticsView(data);
+      return data;
+    }
+
+    function renderMetrics() {
+      if (!state.analyticsView) return;
+      els.metrics.innerHTML = state.analyticsView.metrics
+        .map((item) => '<article class="metric"><span>' + esc(item.label) + '</span><strong>' + esc(item.value) + '</strong><em>' + esc(item.note) + '</em></article>')
+        .join('');
+    }
+
+    function renderInsights() {
+      if (!state.analyticsView) return;
+      els.insights.innerHTML = state.analyticsView.insights
+        .map((item) => '<article class="insight"><b>' + esc(item.title) + '</b><div>' + item.body + '</div></article>')
+        .join('');
+    }
+
+    function renderTables() {
+      if (!state.analyticsView) return;
+      const rows = state.tableRows;
+      renderTable(els.cheapTable, rows.cheap || [], buildAnalyticsColumns('cheap'), 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap' });
+      renderTable(els.expensiveTable, rows.expensive || [], buildAnalyticsColumns('expensive'), 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive' });
+      renderTable(els.olyaTable, rows.olya || [], buildAnalyticsColumns('olya'), 10, { limit: PREVIEW_LIMIT, tableKey: 'olya' });
+      renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
+      renderTable(els.balancedTable, rows.balanced || [], buildAnalyticsColumns('balanced'), 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced' });
+      renderTable(els.scoreTable, rows.score || [], buildAnalyticsColumns('score'), 10, { limit: PREVIEW_LIMIT, tableKey: 'score' });
+      renderTable(els.valueTable, rows.value || [], buildAnalyticsColumns('value'), 10, { limit: PREVIEW_LIMIT, tableKey: 'value' });
+      renderTable(els.startTable, rows.start || [], buildAnalyticsColumns('start'), 10, { limit: PREVIEW_LIMIT, tableKey: 'start' });
+      renderTable(els.minuteTable, rows.minute || [], buildAnalyticsColumns('minute'), 10, { limit: PREVIEW_LIMIT, tableKey: 'minute' });
+      els.olyaAvg.textContent = 'вариантов: ' + (rows.olya || []).length + ', средняя аренда: ' + rub(average((rows.olya || []).map((row) => row.rent)));
+      els.nikitaAvg.textContent = 'вариантов: ' + (rows.nikita || []).length + ', средняя аренда: ' + rub(average((rows.nikita || []).map((row) => row.rent)));
+      els.balancedAvg.textContent = 'средняя аренда: ' + rub(average((rows.balanced || []).map((row) => row.rent)));
+      els.scoreAvg.textContent = 'оценка: среднее из серверных расчётов';
+      els.valueAvg.textContent = 'вариантов с площадью: ' + (rows.value || []).length;
+      els.startAvg.textContent = 'средний вход: ' + rub(average((rows.start || []).map((row) => row.startPayment)));
+      els.minuteAvg.textContent = 'среднее: ' + rub(average((rows.minute || []).map((row) => row.rubPerCommuteMin)));
+    }
+
+    function renderBuckets() {
+      if (!state.analyticsView) return;
+      renderTable(els.bucketsTable, state.tableRows.buckets || [], [
+        { label: 'Группа', render: (row) => esc(row.group) },
+        { label: 'Маршрут', render: (row) => esc(row.route) },
+        { label: 'Кол-во', render: (row) => '<span class="badge">' + row.count + '</span>' },
+        { label: 'Средняя аренда', render: (row) => '<span class="money">' + rub(row.avg) + '</span>' },
+        { label: 'Медиана', render: (row) => '<span class="money">' + rub(row.median) + '</span>' },
+      ]);
+
+      renderTable(els.categoryTable, state.tableRows.categories || [], [
+        { label: 'Тип', render: (row) => esc(row.type) },
+        { label: 'Категория', render: (row) => esc(row.name) },
+        { label: 'Кол-во', render: (row) => '<span class="badge">' + row.count + '</span>' },
+        { label: 'Средняя аренда', render: (row) => '<span class="money">' + rub(row.avg) + '</span>' },
+        { label: 'Медиана аренды', render: (row) => '<span class="money">' + rub(row.median) + '</span>' },
+        { label: 'Средний вход', render: (row) => '<span class="money">' + rub(row.avgStart) + '</span>' },
+        { label: 'Средняя разница', render: (row) => row.type === 'Баланс' ? '<span class="time">' + minutesText(Math.round(row.avgDiff)) + '</span>' : '<span class="muted">-</span>' },
+      ]);
+    }
+
+    function renderAll() {
+      renderMetrics();
+      renderInsights();
+      renderTables();
+      renderBuckets();
+      openTableFromUrl();
+      if (state.analyticsView) {
+        setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + (els.olyaKey.value || '-') + ', ' + (els.nikitaKey.value || '-') + '.', 'ok');
+      }
+    }
+
+    function openFullTable(tableKey, options = {}) {
+      const rows = state.tableRows[tableKey] || [];
+      const columns = buildAnalyticsColumns(tableKey);
+
+      if (!rows.length || !columns.length) {
+        setStatus('Сначала построй аналитику, потом можно открыть полную таблицу.', 'warn');
+        setFullViewVisible(false);
+        return;
+      }
+
+      els.fullTitle.textContent = tableTitles[tableKey] || 'Все варианты';
+      els.fullStatus.textContent = 'Всего вариантов: ' + rows.length;
+      renderTable(els.fullTable, rows, columns, state.tableHighlights[tableKey] || 0);
+      setFullViewVisible(true);
+
+      if (!options.skipHistory) {
+        history.pushState({ tableKey }, '', '/analytics?table=' + encodeURIComponent(tableKey));
+      }
+      els.fullView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function closeFullTable(options = {}) {
+      setFullViewVisible(false);
+      if (!options.skipHistory) {
+        history.pushState({}, '', '/analytics');
+      }
+    }
+
+    async function loadText(text) {
+      const parsed = unwrapJson(JSON.parse(text));
+      state.items = parsed;
+      els.jsonInput.value = text;
+      await loadAnalyticsView(parsed);
+    }
+
+    async function loadSavedAnalyticsData() {
+      try {
+        const response = await fetch('/api/analytics-data');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить сохранённый JSON.');
+        if (!Array.isArray(data.items) || !data.items.length) return;
+        els.jsonInput.value = JSON.stringify(data.items, null, 2);
+        await loadAnalyticsView(data.items);
+        const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
+        setStatus('Загружен сохранённый JSON: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+      } catch (error) {
+        setStatus('Сохранённый JSON не загружен: ' + (error?.message || String(error)), 'warn');
+      }
+    }
+
+    async function handleFile() {
+      const file = els.fileInput.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      await loadText(text);
+    }
+
+    async function handleAnalyze() {
+      try {
+        if (!els.jsonInput.value.trim()) {
+          setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
+          return;
+        }
+        await loadText(els.jsonInput.value);
+      } catch (error) {
+        state.items = [];
+        state.rows = [];
+        state.analyticsView = null;
+        renderAll();
+        setStatus('Ошибка JSON: ' + (error?.message || String(error)), 'warn');
+      }
+    }
+
     els.fileInput.addEventListener('change', handleFile);
     els.analyzeBtn.addEventListener('click', handleAnalyze);
-    els.fastLimit.addEventListener('input', () => { if (state.items.length) { prepareRows(); renderAll(); } });
-    els.olyaKey.addEventListener('change', () => { if (state.items.length) { prepareRows(); renderAll(); } });
-    els.nikitaKey.addEventListener('change', () => { if (state.items.length) { prepareRows(); renderAll(); } });
+    els.fastLimit.addEventListener('input', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
+    els.olyaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
+    els.nikitaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
     document.addEventListener('click', (event) => {
       const button = event.target.closest('.js-open-table');
       if (!button) return;
@@ -3374,6 +4456,7 @@ const analyticsAdminPage = String.raw`<!doctype html>
   </main>
 
   <script>
+    const DEFAULT_ADMIN_KEY = ${JSON.stringify(ADMIN_KEY)};
     const els = {
       adminKey: document.querySelector('#adminKey'),
       fileInput: document.querySelector('#fileInput'),
@@ -3428,7 +4511,9 @@ const analyticsAdminPage = String.raw`<!doctype html>
         const items = updateCountFromText();
         if (!items) throw new Error('Проверь JSON перед сохранением.');
         const key = els.adminKey.value.trim();
+
         if (!key) throw new Error('Введи админ-ключ.');
+
         const response = await fetch('/api/analytics-data', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
@@ -3456,6 +4541,7 @@ const analyticsAdminPage = String.raw`<!doctype html>
     els.jsonInput.addEventListener('input', updateCountFromText);
     els.loadSavedBtn.addEventListener('click', loadSaved);
     els.saveBtn.addEventListener('click', saveJson);
+    if (DEFAULT_ADMIN_KEY) els.adminKey.value = DEFAULT_ADMIN_KEY;
     loadSaved();
   </script>
 </body>
@@ -3503,6 +4589,21 @@ function createServer() {
 
       if (req.method === 'POST' && url.pathname === '/api/preview-images') {
         await handlePreviewImages(req, res);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/filter-preview') {
+        await handleFilterPreview(req, res);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/filter-run') {
+        await handleFilterRun(req, res);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/analytics-run') {
+        await handleAnalyticsRun(req, res);
         return;
       }
 

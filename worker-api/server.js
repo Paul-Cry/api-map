@@ -75,11 +75,22 @@ function sendDownload(res, filename, payload) {
 }
 
 function splitIntoChunks(items, count) {
-  const chunks = Array.from({ length: count }, () => []);
-  items.forEach((item, index) => {
-    chunks[index % count].push(item);
-  });
-  return chunks.filter((chunk) => chunk.length > 0);
+  const safeCount = Math.max(1, Math.min(Number(count) || 1, items.length || 1));
+  const baseSize = Math.floor(items.length / safeCount);
+  const remainder = items.length % safeCount;
+  const chunks = [];
+  let start = 0;
+
+  for (let index = 0; index < safeCount; index += 1) {
+    const size = baseSize + (index < remainder ? 1 : 0);
+    const end = start + size;
+    if (size > 0) {
+      chunks.push(items.slice(start, end));
+    }
+    start = end;
+  }
+
+  return chunks;
 }
 
 function activeWorkers() {
@@ -527,7 +538,7 @@ function dashboardHtml() {
         <h2>Запуск JSON</h2>
         <div class="form">
           <input id="jsonFile" type="file" accept=".json,application/json">
-          <label class="muted" for="workersCount">На сколько частей делить</label>
+          <label class="muted" for="workersCount">На сколько примерно равных частей делить</label>
           <input id="workersCount" type="number" min="1" value="4">
           <button id="runButton" disabled>Запустить обработку</button>
           <div id="message">Выбери JSON-файл.</div>
