@@ -6,7 +6,9 @@ import { randomBytes } from 'node:crypto';
 
 const PORT = Number(globalThis.process?.env?.PORT || 4173);
 const MAX_PORT_ATTEMPTS = 10;
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
+// JSON-файлы с маршрутами и карточками могут быть довольно большими, поэтому
+// держим лимит заметно выше обычного размера пользовательского экспорта.
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const ANALYTICS_DATA_FILE = new URL('./analytics-data.json', import.meta.url);
 const ADMIN_KEY_FILE = new URL('./.analytics-admin-key', import.meta.url);
 
@@ -1151,6 +1153,27 @@ const page = String.raw`<!doctype html>
     .status.ok { color: var(--good); }
     .status.warn { color: var(--warn); }
     .status.bad { color: var(--bad); }
+    .status.busy {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--accent);
+    }
+
+    .status.busy::before {
+      content: '';
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid rgba(110, 168, 255, 0.28);
+      border-top-color: var(--accent);
+      animation: statusSpin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    @keyframes statusSpin {
+      to { transform: rotate(360deg); }
+    }
 
     .feed {
       padding: 10px;
@@ -1499,6 +1522,7 @@ const page = String.raw`<!doctype html>
       sortMode: 'time',
       imageCache: new Map(),
       imageLoading: false,
+      isBusy: false,
       logs: [],
     };
 
@@ -1575,8 +1599,23 @@ const page = String.raw`<!doctype html>
 
     function setStatus(text, tone = 'info') {
       els.resultStatus.textContent = text;
-      els.resultStatus.classList.remove('ok', 'warn', 'bad');
+      els.resultStatus.classList.remove('ok', 'warn', 'bad', 'busy');
       if (tone !== 'info') els.resultStatus.classList.add(tone);
+    }
+
+    function nextPaint() {
+      return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    function setBusyState(text) {
+      state.isBusy = true;
+      setStatus(text, 'busy');
+      updateActionsState();
+    }
+
+    function clearBusyState() {
+      state.isBusy = false;
+      updateActionsState();
     }
 
     function unwrapJson(value) {
@@ -1828,13 +1867,18 @@ const page = String.raw`<!doctype html>
       const hasItems = state.allItems.length > 0;
       const hasVisible = state.visibleItems.length > 0;
       const hasUrls = collectUrls(state.visibleItems).length > 0;
-      els.filterButton.disabled = !hasItems || !state.timeKeys.length;
-      els.resetButton.disabled = !hasItems;
-      els.imageButton.disabled = !hasUrls || state.imageLoading;
-      els.downloadUrlsButton.disabled = !hasUrls;
-      els.downloadUrlsButton.classList.toggle('disabled', !hasUrls);
-      els.downloadButton.disabled = !hasVisible;
-      els.downloadButton.classList.toggle('disabled', !hasVisible);
+      const locked = state.isBusy;
+      els.fileInput.disabled = locked;
+      els.excludeTitle.disabled = locked;
+      els.sortMode.disabled = locked;
+      els.showButton.disabled = locked;
+      els.filterButton.disabled = locked || !hasItems || !state.timeKeys.length;
+      els.resetButton.disabled = locked || !hasItems;
+      els.imageButton.disabled = locked || !hasUrls || state.imageLoading;
+      els.downloadUrlsButton.disabled = locked || !hasUrls;
+      els.downloadUrlsButton.classList.toggle('disabled', locked || !hasUrls);
+      els.downloadButton.disabled = locked || !hasVisible;
+      els.downloadButton.classList.toggle('disabled', locked || !hasVisible);
     }
 
     function buildExportItems() {
@@ -2142,30 +2186,37 @@ const page = String.raw`<!doctype html>
     }
 
     async function loadFilterPreviewFromServer(text, fileName) {
-      const response = await fetch('/api/filter-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, fileName }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Не удалось разобрать JSON на сервере.');
+      setBusyState('Обрабатываю файл и считаю карточки...');
+      await nextPaint();
 
-      state.rawText = text;
-      state.fileName = data.fileName || fileName || '';
-      state.allItems = Array.isArray(data.items) ? data.items : [];
-      state.timeKeys = Array.isArray(data.timeKeys) ? data.timeKeys : [];
-      state.timeLimits = data.timeLimits || {};
-      state.excludeTerms = parseTerms(els.excludeTitle.value);
-      renderTimeFilters();
-      state.sortMode = els.sortMode.value;
-      state.visibleItems = state.allItems.slice();
-      renderCards(state.visibleItems);
-      updateSummary();
-      updateActionsState();
-      const timeText = state.timeKeys.length ? 'Найдены поля времени: ' + state.timeKeys.map(displayText).join(', ') : 'Поля времени не найдены';
-      setStatus('Загружено объектов: ' + state.allItems.length + '. ' + timeText, state.timeKeys.length ? 'ok' : 'warn');
-      log('JSON распарсен сервером: ' + state.allItems.length + ' объектов.', 'ok');
-      log(timeText + '.', state.timeKeys.length ? 'ok' : 'warn');
+      try {
+        const response = await fetch('/api/filter-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, fileName }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось разобрать JSON на сервере.');
+
+        state.rawText = text;
+        state.fileName = data.fileName || fileName || '';
+        state.allItems = Array.isArray(data.items) ? data.items : [];
+        state.timeKeys = Array.isArray(data.timeKeys) ? data.timeKeys : [];
+        state.timeLimits = data.timeLimits || {};
+        state.excludeTerms = parseTerms(els.excludeTitle.value);
+        renderTimeFilters();
+        state.sortMode = els.sortMode.value;
+        state.visibleItems = state.allItems.slice();
+        renderCards(state.visibleItems);
+        updateSummary();
+        updateActionsState();
+        const timeText = state.timeKeys.length ? 'Найдены поля времени: ' + state.timeKeys.map(displayText).join(', ') : 'Поля времени не найдены';
+        setStatus('Готово: ' + state.allItems.length + ' объектов. ' + timeText, state.timeKeys.length ? 'ok' : 'warn');
+        log('JSON распарсен сервером: ' + state.allItems.length + ' объектов.', 'ok');
+        log(timeText + '.', state.timeKeys.length ? 'ok' : 'warn');
+      } finally {
+        clearBusyState();
+      }
     }
 
     async function runFilterOnServer() {
@@ -2184,27 +2235,34 @@ const page = String.raw`<!doctype html>
         return;
       }
 
-      const response = await fetch('/api/filter-run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items: state.allItems,
-          timeKeys: state.timeKeys,
-          timeLimits: state.timeLimits,
-          excludeTerms: parseTerms(els.excludeTitle.value),
-          sortMode: els.sortMode.value,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Не удалось отфильтровать данные.');
+      setBusyState('Считаю подходящие карточки...');
+      await nextPaint();
 
-      state.visibleItems = Array.isArray(data.visibleItems) ? data.visibleItems : [];
-      state.sortMode = data.sortMode || els.sortMode.value;
-      renderCards(state.visibleItems);
-      updateSummary();
-      updateActionsState();
-      setStatus(data.statusText || ('Фильтр: ' + state.visibleItems.length + ' из ' + state.allItems.length), 'ok');
-      log('Фильтр применён на сервере: осталось ' + state.visibleItems.length + ' из ' + state.allItems.length, 'ok');
+      try {
+        const response = await fetch('/api/filter-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: state.allItems,
+            timeKeys: state.timeKeys,
+            timeLimits: state.timeLimits,
+            excludeTerms: parseTerms(els.excludeTitle.value),
+            sortMode: els.sortMode.value,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Не удалось отфильтровать данные.');
+
+        state.visibleItems = Array.isArray(data.visibleItems) ? data.visibleItems : [];
+        state.sortMode = data.sortMode || els.sortMode.value;
+        renderCards(state.visibleItems);
+        updateSummary();
+        updateActionsState();
+        setStatus(data.statusText || ('Фильтр: ' + state.visibleItems.length + ' из ' + state.allItems.length), 'ok');
+        log('Фильтр применён на сервере: осталось ' + state.visibleItems.length + ' из ' + state.allItems.length, 'ok');
+      } finally {
+        clearBusyState();
+      }
     }
 
     async function handleFileInput() {
@@ -2213,12 +2271,17 @@ const page = String.raw`<!doctype html>
 
       try {
         log('Выбран файл: ' + file.name + ' (' + file.size + ' байт).', 'info');
+        setBusyState('Читаю файл...');
+        await nextPaint();
         const text = await file.text();
+        setBusyState('Файл прочитан. Отправляю на сервер и считаю карточки...');
+        await nextPaint();
         await loadFilterPreviewFromServer(text, file.name);
       } catch (error) {
         const message = error?.message || String(error);
         setStatus('Не удалось прочитать файл: ' + message, 'bad');
         log('Ошибка чтения файла: ' + message, 'bad');
+        clearBusyState();
       }
     }
 
@@ -2375,6 +2438,23 @@ const analyticsPage = String.raw`<!doctype html>
     .panel { overflow: hidden; }
     .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--panel-strong); border-bottom: 1px solid var(--line); }
     .panel-title { font-size: 15px; font-weight: 900; }
+    .panel-meta { display: grid; gap: 4px; justify-items: end; text-align: right; }
+    .stage {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: rgba(137, 167, 255, 0.14);
+      color: #dfe6ff;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .stage.ok { background: rgba(124, 199, 168, 0.16); color: #d5ffe9; }
+    .stage.warn { background: rgba(255, 211, 110, 0.16); color: #ffe6a3; }
+    .stage.bad { background: rgba(255, 133, 133, 0.16); color: #ffd0d0; }
     .status { color: var(--muted); font-size: 13px; }
     .panel-body { padding: 12px; }
     .insights { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -2473,7 +2553,10 @@ const analyticsPage = String.raw`<!doctype html>
     <section class="panel json-box">
       <div class="panel-head">
         <div class="panel-title">JSON вручную</div>
-        <div id="status" class="status">Можно загрузить файл или вставить массив объектов сюда</div>
+        <div class="panel-meta">
+          <div id="stage" class="stage">Готово</div>
+          <div id="status" class="status">Можно загрузить файл или вставить массив объектов сюда</div>
+        </div>
       </div>
       <div class="panel-body">
         <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"Родина":"1 ч 43 мин","работа Оли":"2 ч 17 мин"}]'></textarea>
@@ -2575,6 +2658,7 @@ const analyticsPage = String.raw`<!doctype html>
       fastLimit: document.querySelector('#fastLimit'),
       olyaKey: document.querySelector('#olyaKey'),
       nikitaKey: document.querySelector('#nikitaKey'),
+      stage: document.querySelector('#stage'),
       status: document.querySelector('#status'),
       metrics: document.querySelector('#metrics'),
       insights: document.querySelector('#insights'),
@@ -2918,6 +3002,11 @@ const analyticsPage = String.raw`<!doctype html>
       els.status.style.color = tone === 'ok' ? 'var(--accent)' : tone === 'warn' ? 'var(--warn)' : 'var(--muted)';
     }
 
+    function setStage(text, tone = 'info') {
+      els.stage.textContent = text;
+      els.stage.className = 'stage' + (tone === 'info' ? '' : ' ' + tone);
+    }
+
     function fillTimeSelects() {
       const options = state.timeKeys.map((key) => '<option value="' + esc(key) + '">' + esc(key) + '</option>').join('');
       els.olyaKey.innerHTML = options;
@@ -3171,6 +3260,7 @@ const analyticsPage = String.raw`<!doctype html>
         [els.cheapTable, els.expensiveTable, els.olyaTable, els.nikitaTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.valueTable, els.startTable, els.minuteTable, els.categoryTable].forEach((el) => {
           el.innerHTML = '<div class="empty">Загрузи JSON и нажми “Построить”.</div>';
         });
+        setStage(state.items.length ? 'JSON загружен' : 'Ожидание файла', state.items.length ? 'warn' : 'info');
         return;
       }
       renderMetrics();
@@ -3179,22 +3269,44 @@ const analyticsPage = String.raw`<!doctype html>
       renderBuckets();
       openTableFromUrl();
       setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + els.olyaKey.value + ', ' + els.nikitaKey.value + '.', 'ok');
+      setStage('Аналитика построена', 'ok');
     }
 
     function loadText(text) {
+      setStage('Разбор JSON', 'info');
       const parsed = unwrapJson(JSON.parse(text));
       state.items = parsed;
       state.timeKeys = detectTimeKeys(parsed);
       fillTimeSelects();
       prepareRows();
+      setStage('Подсчёт аналитики', 'info');
       renderAll();
+    }
+
+    async function readJsonResponse(response, fallbackMessage) {
+      const text = await response.text();
+      let data = null;
+
+      if (text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text || fallbackMessage);
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(data?.error || data?.message || text || fallbackMessage);
+      }
+
+      return data;
     }
 
     async function loadSavedAnalyticsData() {
       try {
+        setStage('Проверяю сохранённый JSON', 'info');
         const response = await fetch('/api/analytics-data');
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить сохранённый JSON.');
+        const data = await readJsonResponse(response, 'Не удалось загрузить сохранённый JSON.');
         if (!Array.isArray(data.items) || !data.items.length) return;
         els.jsonInput.value = JSON.stringify(data.items, null, 2);
         state.items = data.items;
@@ -3204,16 +3316,20 @@ const analyticsPage = String.raw`<!doctype html>
         renderAll();
         const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
         setStatus('Загружен сохранённый JSON: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+        setStage('Сохранённый JSON загружен', 'ok');
       } catch (error) {
         setStatus('Сохранённый JSON не загружен: ' + (error?.message || String(error)), 'warn');
+        setStage('Сохранение не найдено', 'warn');
       }
     }
 
     async function handleFile() {
       const file = els.fileInput.files?.[0];
       if (!file) return;
+      setStage('Читаю файл', 'info');
       const text = await file.text();
       els.jsonInput.value = text;
+      setStage('Файл загружен', 'info');
       loadText(text);
     }
 
@@ -3221,14 +3337,17 @@ const analyticsPage = String.raw`<!doctype html>
       try {
         if (!els.jsonInput.value.trim()) {
           setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
+          setStage('Нет JSON для подсчёта', 'warn');
           return;
         }
+        setStage('Разбираю вставленный JSON', 'info');
         loadText(els.jsonInput.value);
       } catch (error) {
         state.items = [];
         state.rows = [];
         renderAll();
         setStatus('Ошибка JSON: ' + (error?.message || String(error)), 'warn');
+        setStage('Ошибка разбора JSON', 'bad');
       }
     }
 
@@ -3288,8 +3407,7 @@ const analyticsPage = String.raw`<!doctype html>
           fastLimit: Number(els.fastLimit.value || 90),
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Не удалось построить аналитику на сервере.');
+      const data = await readJsonResponse(response, 'Не удалось построить аналитику на сервере.');
       applyAnalyticsView(data);
       return data;
     }

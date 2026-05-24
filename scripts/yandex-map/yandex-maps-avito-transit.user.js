@@ -90,14 +90,21 @@
   }
 
   function cleanRouteAddress(address) {
-    return normalizeText(address)
-      .replace(/\s*,?\s*(?:от\s*)?\d+\s*[–-]\s*\d+\s*мин\.?.*$/iu, '')
-      .replace(/\s*,?\s*(?:от\s*)?\d+\s*мин\.?.*$/iu, '')
-      .replace(/\s*,?\s*(?:от\s*)?\d+\s*[–-]\s*\d+\s*минут.*$/iu, '')
-      .replace(/\s*,?\s*(?:от\s*)?\d+\s*минут.*$/iu, '')
+    let text = normalizeText(address);
+    if (!text) return '';
+
+    text = text
+      .replace(/\s*,?\s*(?:от\s*)?\d+\s*[–-]\s*\d+\s*мин(?:\.|ут)?\.?.*$/iu, '')
+      .replace(/\s*,?\s*(?:от\s*)?\d+\s*мин(?:\.|ут)?\.?.*$/iu, '')
       .replace(/\s*,\s*,+/g, ', ')
       .replace(/[.,;:\s]+$/g, '')
       .trim();
+
+    if (/\d/.test(text)) {
+      text = text.replace(/\s+[^\d,][^,]*$/u, '').trim();
+    }
+
+    return text;
   }
 
   function withMoscowHint(address) {
@@ -750,16 +757,6 @@
       return parts.join(' ');
     }
 
-    const shortText = normalized.replace(/[.,;:]+$/g, '').trim();
-    const numbers = [...shortText.matchAll(/\d+/g)].map((match) => Number(match[0]));
-    if (shortText.length <= 24 && numbers.length === 2) {
-      return `${numbers[0]} ч ${numbers[1]} мин`;
-    }
-
-    if (shortText.length <= 12 && numbers.length === 1) {
-      return `${numbers[0]} мин`;
-    }
-
     return '';
   }
 
@@ -770,12 +767,6 @@
 
     if (exactPattern.test(normalized) || exactHourPattern.test(normalized)) {
       return extractDurationFromText(normalized);
-    }
-
-    const shortText = normalized.replace(/[.,;:]+$/g, '').trim();
-    const numbers = [...shortText.matchAll(/\d+/g)].map((match) => Number(match[0]));
-    if (shortText.length <= 24 && (numbers.length === 1 || numbers.length === 2)) {
-      return extractDurationFromText(shortText);
     }
 
     return '';
@@ -851,7 +842,12 @@
   }
 
   function findDurationFromVisibleElements() {
-    const nodes = document.querySelectorAll('div, span, button, a, [role="listitem"]');
+    const nodes = document.querySelectorAll([
+      '.route-snippet-view .masstransit-route-snippet-view__route-duration',
+      '.route-snippet-view[aria-label*="На общественном транспорте"]',
+      '.route-list-view [aria-label*="На общественном транспорте"]',
+      '[aria-label*="На общественном транспорте"] .masstransit-route-snippet-view__route-duration',
+    ].join(','));
 
     for (const node of nodes) {
       if (!isVisibleElement(node) || isRouteSegmentElement(node)) continue;

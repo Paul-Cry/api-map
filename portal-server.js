@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
+const PROBE_HOST = "127.0.0.1";
 const MAX_PORT_ATTEMPTS = 10;
 
 const services = {
@@ -17,23 +19,27 @@ const services = {
   },
   filter: {
     name: "Filter",
-    port: Number(process.env.FILTER_PORT || 5102),
+    port: Number(process.env.FILTER_PORT || 5201),
     cwd: join(__dirname, "filter-site"),
     entry: "app.js",
   },
   worker: {
     name: "Worker API",
-    port: Number(process.env.WORKER_PORT || 5103),
+    port: Number(process.env.WORKER_PORT || 5301),
     cwd: join(__dirname, "worker-api"),
     entry: "server.js",
   },
 };
 
-const children = Object.values(services).map(startService);
+const children = [];
+for (const service of Object.values(services)) {
+  children.push(await startService(service));
+}
 
 const server = createServer(async (req, res) => {
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/") {
       sendHtml(res, dashboardPage());
@@ -139,41 +145,47 @@ const server = createServer(async (req, res) => {
     sendText(res, 404, "Route not found");
   } catch (error) {
     console.error(error);
-    sendText(res, 500, error.message || "Server error");
+    const message = error?.message || "Server error";
+    if (url.pathname.startsWith("/api/")) {
+      sendJson(res, 500, { error: message });
+      return;
+    }
+    sendText(res, 500, message);
   }
 });
 
-listenWithFallback(PORT);
+const portalPort = await findFreePort(PORT);
+if (portalPort !== PORT) {
+  console.warn(`Port ${PORT} занят, использую ${portalPort}.`);
+}
 
-function listenWithFallback(startPort, attemptsLeft = MAX_PORT_ATTEMPTS) {
-  const listener = server.listen(startPort, HOST, () => {
+await new Promise((resolve, reject) => {
+  const listener = server.listen(portalPort, HOST, () => {
     const address = listener.address();
-    const boundPort = typeof address === "object" && address ? address.port : startPort;
+    const boundPort = typeof address === "object" && address ? address.port : portalPort;
     console.log(`Portal: http://localhost:${boundPort}`);
     console.log(`Feed:   http://localhost:${boundPort}/feed`);
     console.log(`Admin:  http://localhost:${boundPort}/admin`);
     console.log(`Worker: http://localhost:${boundPort}/worker`);
     console.log(`Filter: http://localhost:${boundPort}/filter`);
+    resolve();
   });
 
-  listener.on("error", (error) => {
-    if (error?.code === "EADDRINUSE" && attemptsLeft > 0) {
-      const nextPort = startPort + 1;
-      console.warn(`Port ${startPort} занят, пробую ${nextPort}...`);
-      listenWithFallback(nextPort, attemptsLeft - 1);
-      return;
-    }
+  listener.once("error", reject);
+});
 
-    throw error;
-  });
-}
+async function startService(service) {
+  const port = await findFreePort(service.port);
+  if (port !== service.port) {
+    console.warn(`[${service.name}] Port ${service.port} занят, использую ${port}.`);
+  }
+  service.port = port;
 
-function startService(service) {
   const child = spawn(process.execPath, [service.entry], {
     cwd: service.cwd,
     env: {
       ...process.env,
-      PORT: String(service.port),
+      PORT: String(port),
       HOST: "127.0.0.1",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -192,6 +204,32 @@ function startService(service) {
   return child;
 }
 
+function findFreePort(startPort) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port, attemptsLeft) => {
+      const probe = createNetServer();
+      probe.unref();
+
+      probe.once("error", (error) => {
+        probe.close();
+        if (error?.code === "EADDRINUSE" && attemptsLeft > 0) {
+          tryPort(port + 1, attemptsLeft - 1);
+          return;
+        }
+        reject(error);
+      });
+
+      probe.listen(port, PROBE_HOST, () => {
+        const address = probe.address();
+        const boundPort = typeof address === "object" && address ? address.port : port;
+        probe.close(() => resolve(boundPort));
+      });
+    };
+
+    tryPort(startPort, MAX_PORT_ATTEMPTS);
+  });
+}
+
 async function proxy(req, res, service, targetPath) {
   const target = `http://127.0.0.1:${service.port}${targetPath}`;
   const headers = { ...req.headers };
@@ -200,9 +238,11 @@ async function proxy(req, res, service, targetPath) {
   delete headers["content-length"];
   delete headers.expect;
 
-  const body = await readRequestBody(req);
+  const method = (req.method || "GET").toUpperCase();
+  const canHaveBody = method !== "GET" && method !== "HEAD";
+  const body = canHaveBody ? await readRequestBody(req) : Buffer.alloc(0);
   const upstream = await fetch(target, {
-    method: req.method,
+    method,
     headers,
     body: body.length ? body : undefined,
     redirect: "manual",
