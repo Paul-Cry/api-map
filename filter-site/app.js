@@ -4755,7 +4755,7 @@ const costsPage = String.raw`<!doctype html>
     .link-btn:hover, .action-btn:hover { border-color: rgba(139, 188, 255, 0.55); }
     .toolbar {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) 140px 190px 180px auto;
+      grid-template-columns: minmax(220px, 1fr) 140px 280px 190px 180px auto;
       gap: 10px;
       align-items: end;
       padding: 14px;
@@ -4780,6 +4780,38 @@ const costsPage = String.raw`<!doctype html>
     }
     input[type="file"] { padding: 8px 10px; color: var(--muted); }
     input:focus, select:focus { border-color: rgba(139, 188, 255, 0.62); }
+    .cost-options {
+      display: grid;
+      gap: 7px;
+      min-height: 42px;
+      color: #c9d5e5;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .check-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 42px;
+      padding: 0 8px;
+      border: 1px solid rgba(110, 168, 255, 0.16);
+      border-radius: 12px;
+      background: #0c1322;
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .check-row input {
+      width: 16px;
+      min-height: 16px;
+      accent-color: var(--accent);
+    }
     .summary {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4899,7 +4931,7 @@ const costsPage = String.raw`<!doctype html>
           <a class="link-btn" href="/analytics">Аналитика</a>
         </div>
       </div>
-      <p>Загрузи JSON с объявлениями: страница посчитает аренду за выбранное количество месяцев, комиссию агентства и залог по каждому объекту.</p>
+      <p>Загрузи JSON с объявлениями: страница посчитает расходы за выбранное количество месяцев. По умолчанию итог включает аренду и комиссию, а залог показывается отдельно.</p>
     </section>
 
     <section class="toolbar">
@@ -4911,6 +4943,14 @@ const costsPage = String.raw`<!doctype html>
         Месяцев
         <input id="monthsInput" type="number" min="1" max="24" step="1" value="3">
       </label>
+      <div class="cost-options" role="group" aria-label="Что учитывать в итоговой сумме">
+        <span>В итог включать</span>
+        <div class="check-list">
+          <label class="check-row"><input id="includeRent" type="checkbox" checked>Аренду</label>
+          <label class="check-row"><input id="includeCommission" type="checkbox" checked>Комиссию</label>
+          <label class="check-row"><input id="includeDeposit" type="checkbox">Залог</label>
+        </div>
+      </div>
       <label class="field">
         Сортировка
         <select id="sortMode">
@@ -4949,6 +4989,9 @@ const costsPage = String.raw`<!doctype html>
     const els = {
       fileInput: document.querySelector('#fileInput'),
       monthsInput: document.querySelector('#monthsInput'),
+      includeRent: document.querySelector('#includeRent'),
+      includeCommission: document.querySelector('#includeCommission'),
+      includeDeposit: document.querySelector('#includeDeposit'),
       sortMode: document.querySelector('#sortMode'),
       searchInput: document.querySelector('#searchInput'),
       downloadBtn: document.querySelector('#downloadBtn'),
@@ -5062,14 +5105,51 @@ const costsPage = String.raw`<!doctype html>
       return displayText(item?.url ?? item?.link ?? item?.href ?? '');
     }
 
+    function getIncludedCosts() {
+      return {
+        rent: els.includeRent.checked,
+        commission: els.includeCommission.checked,
+        deposit: els.includeDeposit.checked,
+      };
+    }
+
+    function buildTotalParts(parts, includes) {
+      const includedParts = [
+        includes.rent ? { label: 'аренда', value: parts.rentForPeriod } : null,
+        includes.commission ? { label: 'комиссия', value: parts.commission } : null,
+        includes.deposit ? { label: 'залог', value: parts.depositValue } : null,
+      ].filter(Boolean);
+      const total = includedParts.reduce((sum, part) => sum + part.value, 0);
+      const formula = includedParts.length
+        ? includedParts.map((part) => part.label + ' ' + rub(part.value)).join(' + ')
+        : 'ничего не включено';
+      const excludedLabels = [
+        includes.rent ? null : 'аренда',
+        includes.commission ? null : 'комиссия',
+        includes.deposit ? null : 'залог',
+      ].filter(Boolean);
+      return {
+        total,
+        formula,
+        includedLabels: includedParts.map((part) => part.label),
+        excludedLabels,
+      };
+    }
+
     function calculateRow(item) {
       const months = Math.max(1, Math.min(Number(els.monthsInput.value || 3), 24));
+      const includedCosts = getIncludedCosts();
       const rent = parsePrice(item);
       const rentForPeriod = rent * months;
       const commissionPercent = findCommissionPercent(item);
       const commission = commissionPercent === null ? 0 : rent * commissionPercent / 100;
       const deposit = findDeposit(item, rent);
-      const total = rentForPeriod + commission + deposit.value;
+      const totalParts = buildTotalParts({
+        rentForPeriod,
+        commission,
+        depositValue: deposit.value,
+      }, includedCosts);
+      const total = totalParts.total;
       const commissionText = commissionPercent === null ? 'не найдена' : commissionPercent + '%';
       const depositText = deposit.found
         ? deposit.inferred ? 'залог принят как 1 месяц' : 'залог найден'
@@ -5091,9 +5171,12 @@ const costsPage = String.raw`<!doctype html>
         commissionText,
         depositText,
         paymentSource: getPaymentSourceText(item),
+        includedCosts,
+        includedCostLabels: totalParts.includedLabels,
+        excludedCostLabels: totalParts.excludedLabels,
         total,
         totalForPeriod: total,
-        paymentFormula: rub(rent) + ' × ' + months + ' мес. + ' + rub(commission) + ' + ' + rub(deposit.value),
+        paymentFormula: totalParts.formula,
       };
     }
 
@@ -5170,10 +5253,13 @@ const costsPage = String.raw`<!doctype html>
               const commissionText = row.commissionText;
               const depositNote = row.depositText;
               const warnings = [
-                row.commissionPercent === null ? '<span class="warn">Комиссия не найдена, считается 0 ₽</span>' : '',
-                row.deposit.found ? '' : '<span class="warn">Залог не найден, считается 0 ₽</span>',
+                row.includedCosts.commission && row.commissionPercent === null ? '<span class="warn">Комиссия не найдена, считается 0 ₽</span>' : '',
+                row.includedCosts.deposit && !row.deposit.found ? '<span class="warn">Залог не найден, считается 0 ₽</span>' : '',
               ].filter(Boolean).join('');
               const formula = row.paymentFormula;
+              const excluded = row.excludedCostLabels.length
+                ? '<span>Не входит: ' + esc(row.excludedCostLabels.join(', ')) + '</span>'
+                : '';
 
               return [
                 '<tr>',
@@ -5183,7 +5269,7 @@ const costsPage = String.raw`<!doctype html>
                   '<td><div class="money">' + rub(row.commission) + '</div><div class="address">' + esc(commissionText) + '</div></td>',
                   '<td><div class="money">' + rub(row.deposit.value) + '</div><div class="address">' + esc(depositNote) + '</div></td>',
                   '<td class="money total">' + rub(row.total) + '</td>',
-                  '<td><div class="notes"><span>' + esc(formula) + '</span>' + warnings + '</div></td>',
+                  '<td><div class="notes"><span>' + esc(formula) + '</span>' + excluded + warnings + '</div></td>',
                 '</tr>',
               ].join('');
             }).join(''),
@@ -5227,6 +5313,8 @@ const costsPage = String.raw`<!doctype html>
         commission: Math.round(row.commission),
         deposit: Math.round(row.deposit.value),
         total_for_period: Math.round(row.total),
+        total_includes: row.includedCostLabels,
+        total_excludes: row.excludedCostLabels,
         rent_per_month_raw: Math.round(row.rentPerMonth),
         commission_text: row.commissionText,
         deposit_text: row.depositText,
@@ -5244,6 +5332,9 @@ const costsPage = String.raw`<!doctype html>
 
     els.fileInput.addEventListener('change', handleFile);
     els.monthsInput.addEventListener('input', recalculate);
+    els.includeRent.addEventListener('change', recalculate);
+    els.includeCommission.addEventListener('change', recalculate);
+    els.includeDeposit.addEventListener('change', recalculate);
     els.sortMode.addEventListener('change', renderRows);
     els.searchInput.addEventListener('input', renderRows);
     els.downloadBtn.addEventListener('click', downloadRows);
