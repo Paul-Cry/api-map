@@ -826,6 +826,59 @@
     );
   }
 
+  function getElementTextValue(element) {
+    if (!element) return '';
+    if ('value' in element) return normalizeText(element.value || '');
+    return normalizeText(element.getAttribute('aria-label') || element.getAttribute('title') || element.textContent || '');
+  }
+
+  function isMoscowOnlyAddress(value) {
+    const text = normalizeText(value).replace(/[.,;:\s]+$/g, '').toLowerCase();
+    return /^(?:москва|moscow)(?:,\s*(?:россия|russia))?$/.test(text);
+  }
+
+  function findMoscowOnlyRouteAddressField() {
+    const selectors = [
+      'input',
+      'textarea',
+      '[contenteditable="true"]',
+      '[role="textbox"]',
+      '[role="combobox"]',
+    ].join(',');
+
+    for (const node of document.querySelectorAll(selectors)) {
+      if (node.closest('#codex-yandex-transit-root')) continue;
+      if (!isVisibleElement(node)) continue;
+
+      const text = getElementTextValue(node);
+      if (isMoscowOnlyAddress(text)) {
+        return {
+          text,
+          selector: node.tagName.toLowerCase(),
+          node,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function validateRouteOriginAddress(job) {
+    if (isMoscowOnlyAddress(job?.origin)) return null;
+
+    const moscowOnlyField = findMoscowOnlyRouteAddressField();
+    if (!moscowOnlyField) return null;
+
+    highlightDurationNode(moscowOnlyField.node, '#ff9800');
+    return {
+      value: 'адрес в Яндекс.Картах стал Москва',
+      method: 'origin address guard',
+      selector: moscowOnlyField.selector,
+      text: moscowOnlyField.text,
+      node: moscowOnlyField.node,
+    };
+  }
+
   function isRouteSegmentElement(element) {
     const blocked = element.closest(
       [
@@ -842,12 +895,7 @@
   }
 
   function findDurationFromVisibleElements() {
-    const nodes = document.querySelectorAll([
-      '.route-snippet-view .masstransit-route-snippet-view__route-duration',
-      '.route-snippet-view[aria-label*="На общественном транспорте"]',
-      '.route-list-view [aria-label*="На общественном транспорте"]',
-      '[aria-label*="На общественном транспорте"] .masstransit-route-snippet-view__route-duration',
-    ].join(','));
+    const nodes = document.querySelectorAll('div, span, button, a, [role="listitem"]');
 
     for (const node of nodes) {
       if (!isVisibleElement(node) || isRouteSegmentElement(node)) continue;
@@ -1148,9 +1196,38 @@
       log(`Куда: ${job.destination}`);
       setStatus(`Считаю: ${job.origin} -> ${job.destinationLabel}`);
       const durationSource = await waitForDuration();
-      const duration = durationSource.value;
+      const addressGuardSource = validateRouteOriginAddress(job);
+      const finalDurationSource = addressGuardSource || durationSource;
+      const duration = finalDurationSource.value;
+      if (addressGuardSource) {
+        log(`Address guard: route origin field is "${addressGuardSource.text}", expected "${job.origin}".`);
+      }
 
       const nextState = readState();
+      if (addressGuardSource && Number(job.addressGuardRetries || 0) < 1) {
+        const retryItem = nextState.items?.[job.itemIndex];
+        const retryOrigin = withMoscowHint(getAddress(retryItem)) || job.origin;
+        const retryJob = {
+          ...job,
+          origin: retryOrigin,
+          addressGuardRetries: Number(job.addressGuardRetries || 0) + 1,
+        };
+        nextState.currentJob = retryJob;
+        nextState.running = true;
+        nextState.logs = [
+          ...(nextState.logs || []),
+          `[${now()}] Address guard retry: object ${job.itemIndex + 1}, ${job.destinationLabel}, origin="${retryOrigin}".`,
+        ].slice(-180);
+        writeState(nextState);
+        render();
+        setStatus(`Address guard retry: ${retryOrigin} -> ${job.destinationLabel}`);
+        setTimeout(() => {
+          navigateToJob(retryJob);
+          scheduleCurrentJobProcessing(ROUTE_REQUEST_DELAY_MS);
+        }, ROUTE_REQUEST_DELAY_MS);
+        return;
+      }
+
       const item = nextState.items?.[job.itemIndex];
       if (item) item[job.destinationKey] = duration;
       if (!item) log(`Предупреждение: объект ${job.itemIndex + 1} не найден в текущем состоянии.`);
@@ -1161,7 +1238,7 @@
         nextState.lastError = 'Остановлено режимом отладки после найденного времени';
         nextState.logs = [
           ...(nextState.logs || []),
-          `[${now()}] DEBUG STOP: ${describeDurationSource(durationSource)}`,
+          `[${now()}] DEBUG STOP: ${describeDurationSource(finalDurationSource)}`,
         ].slice(-180);
         writeState(nextState);
         render();
@@ -1487,7 +1564,7 @@
     const textarea = document.querySelector('#codex-yandex-transit-input');
     const logNode = document.querySelector('#codex-yandex-transit-log');
 
-    if (textarea && state.items?.length && !textarea.value.trim()) {
+    if (textarea && state.items?.length && (!textarea.value.trim() || state.running || Number(state.done || 0) > 0)) {
       textarea.value = JSON.stringify(state.items, null, 2);
     }
 
