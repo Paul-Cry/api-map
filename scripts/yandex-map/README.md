@@ -1,34 +1,26 @@
-# 2gis script
+# Yandex Maps Avito Transit
 
-Папка с userscript-расширением для расчета времени в пути от адресов из массива Avito до двух точек:
+Папка с двумя вариантами запуска расчета времени маршрута из адресов Avito до двух точек в Москве:
 
-- `"Родина"`: `55.764323,37.556119`
-- `"работа Оли"`: `55.661195,37.508398`
+- `yandex-maps-avito-transit.user.js` - userscript для ручного запуска в браузере.
+- `yandex-maps-avito-transit-headless.py` - headless/headed runner на `crawl4ai` с поддержкой `--proxy`.
 
-Скрипт работает на странице Яндекс.Карт:
+Точки назначения:
+
+- `Родина`: `55.764323,37.556119`
+- `работа Оли`: `55.661195,37.508398`
+
+## Userscript
+
+Открыть страницу Яндекс.Карт:
 
 ```text
 https://yandex.ru/maps/213/moscow/?ll=37.617700%2C55.755863&mode=routes&rtext=&rtt=mt&z=10
 ```
 
-## Как установить
+Установить `yandex-maps-avito-transit.user.js` в Tampermonkey, затем вставить JSON-массив объектов Avito и нажать `Старт`.
 
-1. Установи Tampermonkey в браузер.
-2. Открой файл `yandex-maps-avito-transit.user.js`.
-3. Нажми Install / Установить.
-4. Открой страницу Яндекс.Карт по ссылке выше.
-
-## Как использовать
-
-1. На странице появится панель `Avito Transit`.
-2. Вставь JSON-массив объектов Avito в поле.
-3. Нажми `Старт`.
-4. Скрипт по очереди построит маршруты общественным транспортом:
-   - от `adress` / `address` / `адрес` объекта до `"Родина"`;
-   - от того же адреса до `"работа Оли"`.
-5. После завершения нажми `Копировать JSON` или `Скачать JSON`.
-
-## Формат входных данных
+## Input format
 
 ```json
 [
@@ -40,7 +32,9 @@ https://yandex.ru/maps/213/moscow/?ll=37.617700%2C55.755863&mode=routes&rtext=&r
 ]
 ```
 
-## Формат результата
+Скрипт читает поле `adress`, `address` или `адрес`.
+
+## Output format
 
 ```json
 [
@@ -54,18 +48,77 @@ https://yandex.ru/maps/213/moscow/?ll=37.617700%2C55.755863&mode=routes&rtext=&r
 ]
 ```
 
-## Важные детали
+## Headless runner
 
-- Скрипт считает именно общественный транспорт: в URL ставится `rtt=mt`.
-- Перед каждым запросом маршрута и перед чтением результата стоит пауза 0.25 секунды, чтобы не дергать Яндекс.Карты слишком быстро.
-- Результат маршрута ожидается максимум 1.5 секунды. Если время не появилось, скрипт пишет `время не найдено` и идет дальше.
-- Если Яндекс.Карты переключают маршрут без перезагрузки страницы, скрипт продолжает очередь сам через внутренний таймер.
-- Прогресс хранится в Tampermonkey storage, поэтому переходы страницы между маршрутами не ломают очередь.
-- В панели и в консоли браузера пишутся подробные логи: текущий объект, точка назначения, ожидание карточки, найденное время, следующий маршрут и ошибки.
-- В панели показывается примерное оставшееся время до завершения всех маршрутов, рассчитанное по статистике последних маршрутов.
-- Для отладки есть чекбокс `Стоп на найденном времени` и кнопка `Проверить время сейчас`: они показывают селектор, текст узла и источник найденного времени.
-- При найденном времени скрипт подсвечивает источник красной рамкой. Если время не распознано, красной рамкой подсвечиваются все найденные блоки `.masstransit-route-snippet-view__route-duration`.
-- Если адрес не найден или маршрут не построился, в поле будет записано сообщение вроде `маршрут не найден` или `время не найдено`.
-- Из адреса перед отправкой в Яндекс.Карты убирается только хвост с временем до метро, например `6–10 мин.`, а сам адрес сохраняется.
-- Время берется из активной карточки общественного транспорта: сначала из `.route-snippet-view._active._type_masstransit .masstransit-route-snippet-view__route-duration`, затем из `aria-label`, затем из первого видимого общего времени в левой панели.
-- Если Яндекс поменяет верстку, может потребоваться поправить поиск времени в `findRouteDuration()`.
+Установить зависимости:
+
+```bash
+pip install crawl4ai
+crawl4ai-setup
+```
+
+Пример запуска:
+
+```bash
+python scripts/yandex-map/yandex-maps-avito-transit-headless.py input.json --headless --proxy http://user:pass@ip:port
+```
+
+Полезные флаги:
+
+- `--headless` - запуск без окна браузера.
+- `--headed` - запуск с видимым окном для отладки.
+- `--proxy http://user:pass@ip:port` - прокси для браузера.
+- `--save-html` - сохранить HTML каждой страницы рядом с результатом.
+- `--timeout-ms 60000` - увеличить ожидание страницы.
+- `--delay-ms 250` - пауза между маршрутами.
+
+Подробнее см. [`README-headless.md`](./README-headless.md).
+
+## Удобный запуск через npm
+
+Из корня проекта можно запускать так:
+
+```bash
+npm run menu
+```
+
+Это откроет интерактивное меню для Yandex Maps.
+
+Если нужен прямой headless-запуск из npm, используй:
+
+```bash
+npm run yandex:headless -- input.json --headless
+```
+
+С прокси:
+
+```bash
+npm run yandex:headless -- input.json --headless --proxy http://user:pass@ip:port
+```
+
+Если PowerShell блокирует `npm.ps1`, используй обычные Windows-обертки из корня проекта:
+
+```powershell
+.\menu.cmd
+.\yandex-headless.cmd input.json --headless
+```
+
+Если нужен именно npm-стиль из PowerShell, запускай `npm.cmd run menu` вместо `npm run menu`.
+
+## Quick commands
+
+From the project root:
+
+```powershell
+npm.cmd run yandex
+npm.cmd run yandex:headless -- input.json
+npm.cmd run yandex:api
+```
+
+For direct headless run with proxy:
+
+```powershell
+npm.cmd run yandex:headless -- input.json --proxy http://user:pass@ip:port
+```
+
+`yandex` opens the interactive launcher, `yandex:headless` starts the Python runner, and `yandex:api` starts the API worker mode.

@@ -6,6 +6,12 @@
   "scripts": {
     "start": "node portal-server.js",
     "portal": "node portal-server.js",
+    "menu": "node scripts/yandex-map/yandex-launcher.js",
+    "yandex": "node scripts/yandex-map/yandex-launcher.js",
+    "yandex:api": "node scripts/yandex-map/yandex-launcher.js api",
+    "yandex:menu": "node scripts/yandex-map/yandex-launcher.js",
+    "yandex:headless": "node scripts/yandex-map/yandex-launcher.js headless",
+    "yandex:headless:menu": "node scripts/yandex-map/yandex-launcher.js headless",
     "feed": "node site_for_obv/app.js",
     "filter": "node filter-site/app.js",
     "worker": "node worker-api/server.js",
