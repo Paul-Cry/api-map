@@ -125,6 +125,32 @@ function normalizeProxyInput(value) {
   return `http://${text}`;
 }
 
+function consumeOption(args, names) {
+  const nameSet = new Set(names);
+  const rest = [];
+  let value = '';
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const equalsIndex = arg.indexOf('=');
+
+    if (equalsIndex > 0 && nameSet.has(arg.slice(0, equalsIndex))) {
+      value = arg.slice(equalsIndex + 1);
+      continue;
+    }
+
+    if (nameSet.has(arg)) {
+      value = args[index + 1] || '';
+      index += 1;
+      continue;
+    }
+
+    rest.push(arg);
+  }
+
+  return { value, rest };
+}
+
 async function runPython(args) {
   return spawnAndWait(pythonExe, [pythonScript, ...args]);
 }
@@ -146,23 +172,35 @@ async function runBatchMode(inputPath, headless, saveHtml, extraPythonArgs = [])
 }
 
 async function runApiMode(rl, state, extraPythonArgs = []) {
+  const apiOption = consumeOption(extraPythonArgs, ['--api-url']);
+  const proxyOption = consumeOption(apiOption.rest, ['--proxy']);
+  const passthroughArgs = proxyOption.rest;
   const defaultApiUrl = state.lastApiUrl || 'http://127.0.0.1:8787';
   let apiUrl = '';
 
-  while (!apiUrl) {
-    const candidate = await promptText(rl, 'API URL', defaultApiUrl);
+  if (apiOption.value) {
     try {
-      apiUrl = await validateApiUrl(candidate);
+      apiUrl = await validateApiUrl(apiOption.value);
     } catch (error) {
       console.error(`Invalid API URL: ${error.message || error}`);
-      apiUrl = '';
+      return 1;
+    }
+  } else {
+    while (!apiUrl) {
+      const candidate = await promptText(rl, 'API URL', defaultApiUrl);
+      try {
+        apiUrl = await validateApiUrl(candidate);
+      } catch (error) {
+        console.error(`Invalid API URL: ${error.message || error}`);
+        apiUrl = '';
+      }
     }
   }
 
   const defaultProxy = state.lastProxy || '';
-  const proxyValue = normalizeProxyInput(
-    await promptText(rl, 'Proxy URL (leave empty for none)', defaultProxy),
-  );
+  const proxyValue = proxyOption.value
+    ? normalizeProxyInput(proxyOption.value)
+    : normalizeProxyInput(await promptText(rl, 'Proxy URL (leave empty for none)', defaultProxy));
 
   await saveState({
     ...state,
@@ -179,7 +217,7 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
     '--api-url',
     apiUrl,
     ...(proxyValue ? ['--proxy', proxyValue] : []),
-    ...extraPythonArgs,
+    ...passthroughArgs,
   ].join(' ')}`);
   console.log('');
 
@@ -187,7 +225,7 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
     '--api-url',
     apiUrl,
     ...(proxyValue ? ['--proxy', proxyValue] : []),
-    ...extraPythonArgs,
+    ...passthroughArgs,
   ]);
 }
 
