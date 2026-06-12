@@ -7,6 +7,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const WORKER_TTL_MS = Number(process.env.WORKER_TTL_MS || 45000);
 
 const workers = new Map();
+const deletedWorkerIds = new Set();
 const batches = new Map();
 const jobs = new Map();
 const queue = [];
@@ -269,6 +270,7 @@ function statusView() {
 }
 
 function updateWorker(workerId, patch = {}) {
+  deletedWorkerIds.delete(workerId);
   const existing = workers.get(workerId) || { workerId };
   const next = {
     ...existing,
@@ -323,10 +325,21 @@ function setAllWorkersStop(reason = 'manual stop all') {
 }
 
 function clearAllWorkersStop() {
+  deletedWorkerIds.clear();
   const affected = [];
   for (const workerId of workers.keys()) {
     affected.push(workerView(clearWorkerStop(workerId)));
   }
+  return affected;
+}
+
+function deleteAllWorkers(reason = 'manual delete all workers') {
+  const affected = [];
+  for (const worker of workers.values()) {
+    affected.push(workerView(setWorkerStop(worker.workerId, reason)));
+    deletedWorkerIds.add(worker.workerId);
+  }
+  workers.clear();
   return affected;
 }
 
@@ -620,6 +633,7 @@ function dashboardHtml() {
       <button id="syncAllButton">Sync all</button>
       <button id="stopAllButton">Stop all</button>
       <button id="continueAllButton">Continue all</button>
+      <button id="deleteAllWorkersButton" class="danger">Delete all workers</button>
       <button id="deleteAllJobsButton" class="danger">Delete all jobs</button>
     </div>
 
@@ -831,6 +845,23 @@ function dashboardHtml() {
       }
     });
 
+    $('deleteAllWorkersButton').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      setMessage('Deleting all workers...');
+      try {
+        const response = await fetch('/api/workers/delete-all', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to delete workers');
+        await refresh();
+        setMessage('Deleted workers: ' + (data.deleted || 0) + '.');
+      } catch (error) {
+        setMessage(error.message || String(error));
+      } finally {
+        button.disabled = false;
+      }
+    });
+
     $('deleteAllJobsButton').addEventListener('click', async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -942,6 +973,20 @@ async function handleRequest(req, res) {
       return;
     }
 
+    if (deletedWorkerIds.has(workerId)) {
+      sendJson(res, 200, {
+        ok: true,
+        command: 'stop',
+        worker: {
+          workerId,
+          status: 'deleted',
+          stopped: true,
+          ready: false,
+        },
+      });
+      return;
+    }
+
     const existing = workers.get(workerId) || { workerId };
     if (existing.resetJobId) {
       if (body?.currentJobId === existing.resetJobId) {
@@ -1024,6 +1069,17 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && path === '/api/workers/delete-all') {
+    const workersDeleted = deleteAllWorkers('manual delete all workers request');
+    sendJson(res, 200, {
+      ok: true,
+      workers: workersDeleted,
+      deleted: workersDeleted.length,
+      affected: workersDeleted.length,
+    });
+    return;
+  }
+
   if (req.method === 'POST' && path === '/api/jobs/delete-all') {
     const deletedJobs = deleteAllJobs('manual delete all request');
     sendJson(res, 200, {
@@ -1057,6 +1113,21 @@ async function handleRequest(req, res) {
   const jobPollMatch = path.match(/^\/api\/workers\/([^/]+)\/job$/);
   if (req.method === 'GET' && jobPollMatch) {
     const workerId = decodeURIComponent(jobPollMatch[1]);
+    if (deletedWorkerIds.has(workerId)) {
+      sendJson(res, 200, {
+        ok: true,
+        job: null,
+        command: 'stop',
+        worker: {
+          workerId,
+          status: 'deleted',
+          stopped: true,
+          ready: false,
+        },
+      });
+      return;
+    }
+
     const existing = workers.get(workerId);
     if (existing?.resetJobId) {
       const worker = clearWorkerReset(workerId);

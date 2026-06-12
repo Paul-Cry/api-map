@@ -54,6 +54,79 @@ function spawnAndWait(commandName, args, options = {}) {
   });
 }
 
+function spawnManyAndWait(commands) {
+  const children = new Set();
+  let stopping = false;
+
+  return new Promise((resolve, reject) => {
+    const exitCodes = Array(commands.length).fill(null);
+
+    const stopAll = (signal) => {
+      stopping = true;
+      for (const child of children) {
+        if (!child.killed) {
+          child.kill(signal);
+        }
+      }
+    };
+
+    const cleanup = () => {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+    };
+
+    const onSigint = () => stopAll('SIGINT');
+    const onSigterm = () => stopAll('SIGTERM');
+
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
+
+    const maybeDone = () => {
+      if (exitCodes.some((code) => code === null)) return;
+      cleanup();
+      if (stopping) {
+        resolve(130);
+        return;
+      }
+      resolve(exitCodes.some((code) => code !== 0) ? 1 : 0);
+    };
+
+    const writePrefixed = (stream, prefix, chunk) => {
+      const lines = String(chunk).split(/\r?\n/);
+      for (const line of lines) {
+        if (!line) continue;
+        stream.write(`${prefix} ${line}\n`);
+      }
+    };
+
+    commands.forEach((item, index) => {
+      const child = spawn(item.commandName, item.args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: projectRoot,
+        shell: false,
+        ...item.options,
+      });
+
+      children.add(child);
+      child.stdout.on('data', (chunk) => writePrefixed(process.stdout, item.prefix, chunk));
+      child.stderr.on('data', (chunk) => writePrefixed(process.stderr, item.prefix, chunk));
+      child.on('error', (error) => {
+        cleanup();
+        reject(error);
+      });
+      child.on('exit', (code, signal) => {
+        children.delete(child);
+        if (signal) {
+          exitCodes[index] = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1;
+        } else {
+          exitCodes[index] = code ?? 0;
+        }
+        maybeDone();
+      });
+    });
+  });
+}
+
 async function loadState() {
   try {
     const text = await fs.readFile(stateFile, 'utf8');
@@ -151,6 +224,18 @@ function consumeOption(args, names) {
   return { value, rest };
 }
 
+async function readProxyFile(proxyFile) {
+  const resolvedPath = path.resolve(projectRoot, proxyFile);
+  const text = await fs.readFile(resolvedPath, 'utf8');
+  const proxies = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map(normalizeProxyInput);
+
+  return { resolvedPath, proxies };
+}
+
 async function runPython(args) {
   return spawnAndWait(pythonExe, [pythonScript, ...args]);
 }
@@ -229,6 +314,102 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
   ]);
 }
 
+async function resolveApiUrlForMode(rl, state, apiUrlValue) {
+  const defaultApiUrl = state.lastApiUrl || 'http://127.0.0.1:8787';
+
+  if (apiUrlValue) {
+    return validateApiUrl(apiUrlValue);
+  }
+
+  while (true) {
+    const candidate = await promptText(rl, 'API URL', defaultApiUrl);
+    try {
+      return await validateApiUrl(candidate);
+    } catch (error) {
+      console.error(`Invalid API URL: ${error.message || error}`);
+    }
+  }
+}
+
+async function runApiProxyFileMode(rl, state, extraPythonArgs = []) {
+  const apiOption = consumeOption(extraPythonArgs, ['--api-url']);
+  const proxyFileOption = consumeOption(apiOption.rest, ['--proxy-file', '--proxies']);
+  const limitOption = consumeOption(proxyFileOption.rest, ['--limit']);
+  const passthroughArgs = limitOption.rest;
+
+  let apiUrl = '';
+  try {
+    apiUrl = await resolveApiUrlForMode(rl, state, apiOption.value);
+  } catch (error) {
+    console.error(`Invalid API URL: ${error.message || error}`);
+    return 1;
+  }
+
+  const proxyFile = proxyFileOption.value || (await promptText(rl, 'Proxy TXT file'));
+  if (!proxyFile) {
+    console.error('Proxy TXT file is required.');
+    return 1;
+  }
+
+  let proxyData = null;
+  try {
+    proxyData = await readProxyFile(proxyFile);
+  } catch (error) {
+    console.error(`Could not read proxy file: ${error.message || error}`);
+    return 1;
+  }
+
+  let proxies = proxyData.proxies;
+  if (limitOption.value) {
+    const limit = Number(limitOption.value);
+    if (!Number.isInteger(limit) || limit < 1) {
+      console.error('--limit must be a positive integer.');
+      return 1;
+    }
+    proxies = proxies.slice(0, limit);
+  }
+
+  if (!proxies.length) {
+    console.error(`Proxy file has no proxies: ${proxyData.resolvedPath}`);
+    return 1;
+  }
+
+  await saveState({
+    ...state,
+    lastApiUrl: apiUrl,
+  });
+
+  const runId = Date.now().toString(36);
+  const commands = proxies.map((proxyValue, index) => {
+    const workerNumber = String(index + 1).padStart(2, '0');
+    const workerId = `yandex-${runId}-${workerNumber}`;
+    return {
+      commandName: pythonExe,
+      prefix: `[worker ${workerNumber}/${proxies.length}]`,
+      args: [
+        pythonScript,
+        '--api-url',
+        apiUrl,
+        '--proxy',
+        proxyValue,
+        '--worker-id',
+        workerId,
+        ...passthroughArgs,
+      ],
+    };
+  });
+
+  console.log('');
+  console.log('Starting API workers from proxy file:');
+  console.log(`  API URL:     ${apiUrl}`);
+  console.log(`  Proxy file:  ${proxyData.resolvedPath}`);
+  console.log(`  Workers:     ${commands.length}`);
+  console.log(`  Extra args:  ${passthroughArgs.length ? passthroughArgs.join(' ') : '(none)'}`);
+  console.log('');
+
+  return spawnManyAndWait(commands);
+}
+
 async function interactiveMenu() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -249,17 +430,18 @@ async function interactiveMenu() {
       console.log('2. Run result.json');
       console.log('3. Pick any JSON from project root');
       console.log('4. API worker mode');
-      console.log('5. Open output folder');
+      console.log('5. API workers from proxy TXT');
+      console.log('6. Open output folder');
       console.log('0. Exit');
       console.log('');
 
-      const choice = await promptChoice(rl, 'Select action', ['0', '1', '2', '3', '4', '5']);
+      const choice = await promptChoice(rl, 'Select action', ['0', '1', '2', '3', '4', '5', '6']);
 
       if (choice === '0') {
         return 0;
       }
 
-      if (choice === '5') {
+      if (choice === '6') {
         await spawnAndWait('explorer.exe', [__dirname]);
         await rl.question('Press Enter to continue...');
         continue;
@@ -268,6 +450,12 @@ async function interactiveMenu() {
       if (choice === '4') {
         const exitCode = await runApiMode(rl, state);
         await rl.question(`Worker finished with exit code ${exitCode}. Press Enter to continue...`);
+        continue;
+      }
+
+      if (choice === '5') {
+        const exitCode = await runApiProxyFileMode(rl, state);
+        await rl.question(`Workers finished with exit code ${exitCode}. Press Enter to continue...`);
         continue;
       }
 
@@ -328,13 +516,27 @@ async function main() {
     return;
   }
 
+  if (command === 'api-proxies' || command === 'api:proxies') {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const state = await loadState();
+    try {
+      process.exitCode = await runApiProxyFileMode(rl, state, extraArgs);
+    } finally {
+      rl.close();
+    }
+    return;
+  }
+
   if (command === 'menu') {
     process.exitCode = await interactiveMenu();
     return;
   }
 
   console.error(`Unknown yandex launcher command: ${command}`);
-  console.error('Available commands: menu, headless, api');
+  console.error('Available commands: menu, headless, api, api-proxies');
   process.exitCode = 1;
 }
 

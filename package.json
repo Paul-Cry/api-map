@@ -9,6 +9,7 @@
     "menu": "node scripts/yandex-map/yandex-launcher.js",
     "yandex": "node scripts/yandex-map/yandex-launcher.js",
     "yandex:api": "node scripts/yandex-map/yandex-launcher.js api",
+    "yandex:api:proxies": "node scripts/yandex-map/yandex-launcher.js api-proxies",
     "yandex:menu": "node scripts/yandex-map/yandex-launcher.js",
     "yandex:headless": "node scripts/yandex-map/yandex-launcher.js headless",
     "yandex:headless:menu": "node scripts/yandex-map/yandex-launcher.js headless",
