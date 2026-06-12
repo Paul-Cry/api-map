@@ -2,7 +2,7 @@
 // @name         Avito Transit Time via Yandex Maps
 // @namespace    local.codex.avito.yandex.transit
 // @version      1.1.1
-// @description  По очереди строит маршруты в Яндекс.Картах и добавляет время до "Родина" и "работа Оли" в JSON-объекты Avito.
+// @description  По очереди строит маршруты в Яндекс.Картах и добавляет время до "работа" в JSON-объекты Avito.
 // @match        *://yandex.kz/maps/*
 // @match        *://yandex.ru/maps/*
 // @match        *://yandex.com/maps/*
@@ -41,14 +41,9 @@
 
   const DESTINATIONS = [
     {
-      key: 'Родина',
-      label: 'Родина',
-      coords: '55.764323,37.556119',
-    },
-    {
-      key: 'работа Оли',
-      label: 'работа Оли',
-      coords: '55.661195,37.508398',
+      key: 'работа',
+      label: 'работа',
+      coords: '55.806980,37.502579',
     },
   ];
 
@@ -322,8 +317,9 @@
     items.forEach((item, itemIndex) => {
       const address = getAddress(item);
       if (!address) {
-        item['Родина'] = 'адрес не найден';
-        item['работа Оли'] = 'адрес не найден';
+        for (const destination of DESTINATIONS) {
+          item[destination.key] = 'адрес не найден';
+        }
         return;
       }
 
