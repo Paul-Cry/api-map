@@ -33,7 +33,7 @@ function loadAdminKey() {
 }
 
 const ADMIN_KEY = loadAdminKey();
-const preferredFilterTimeKeys = ['Родина', 'работа Оли'];
+const preferredFilterTimeKeys = ['работа', 'работа 2'];
 const ignoredFilterTimeKeyNames = new Set([
   'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
   'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
@@ -465,7 +465,7 @@ function balanceType(olya, nikita) {
   if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
   const diff = Math.abs(olya - nikita);
   if (diff === 0) return 'одинаково';
-  const side = olya < nikita ? 'Оле быстрее' : 'Никите быстрее';
+  const side = olya < nikita ? 'Работа быстрее' : 'Работа 2 быстрее';
   if (diff <= 15) return 'почти одинаково, ' + side;
   if (diff <= 30) return 'разница 16-30 мин, ' + side;
   if (diff <= 60) return 'разница 31-60 мин, ' + side;
@@ -632,8 +632,8 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
     ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
     ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-    ['Среднее до Оли', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
-    ['Среднее до Никиты', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
+    ['Среднее до работы', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
+    ['Среднее до работы 2', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
     ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
     ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
     ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
@@ -652,7 +652,7 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const insights = [
     ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
     ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
-    ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+    ['Самый быстрый до работы', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
     ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
   ].map(([title, body]) => ({ title, body }));
 
@@ -661,8 +661,8 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     { label: 'Аренда' },
     { label: 'Цена за м²' },
     { label: 'Итого ' + periodLabel },
-    { label: 'До Оли' },
-    { label: 'До Никиты' },
+    { label: 'До работы' },
+    { label: 'До работы 2' },
   ];
 
   const cheap = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
@@ -742,8 +742,8 @@ function buildAnalyticsBuckets(rows) {
     ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
   ];
   const keys = [
-    ['Оля', 'olya'],
-    ['Никита', 'nikita'],
+    ['Работа', 'olya'],
+    ['Работа 2', 'nikita'],
     ['Оба маршрута', 'both'],
   ];
   const result = [];
@@ -1035,7 +1035,30 @@ async function handleFilterRun(req, res) {
 
 async function handleAnalyticsRun(req, res) {
   const payload = await readJsonPayload(req);
-  const items = Array.isArray(payload?.items) ? payload.items : [];
+  let items = Array.isArray(payload?.items) ? payload.items : [];
+  let saved = null;
+
+  if (!items.length && payload?.source === 'saved') {
+    saved = await readSavedAnalyticsData();
+    if (payload?.datasetId) {
+      const selected = saved.datasets.find((dataset) => dataset.id === String(payload.datasetId));
+      if (selected) {
+        items = selected.items;
+        saved = {
+          ...saved,
+          items,
+          updatedAt: selected.updatedAt,
+          activeId: selected.id,
+          activeName: selected.name,
+        };
+      } else {
+        items = saved.items;
+      }
+    } else {
+      items = saved.items;
+    }
+  }
+
   const fastLimit = Number.isFinite(Number(payload?.fastLimit)) ? Number(payload.fastLimit) : 90;
   const timeKeys = Array.isArray(payload?.timeKeys) && payload.timeKeys.length
     ? payload.timeKeys.filter(Boolean)
@@ -1050,6 +1073,15 @@ async function handleAnalyticsRun(req, res) {
     timeKeys: analytics.timeKeys,
     selectedKeys: { olyaKey: analytics.olyaKey, nikitaKey: analytics.nikitaKey },
     fastLimit: analytics.fastLimit,
+    updatedAt: saved?.updatedAt || null,
+    activeId: saved?.activeId || null,
+    activeName: saved?.activeName || null,
+    datasets: saved?.datasets?.map((dataset) => ({
+      id: dataset.id,
+      name: dataset.name,
+      count: dataset.items.length,
+      updatedAt: dataset.updatedAt,
+    })) || [],
     ...analytics,
   });
 }
@@ -1601,7 +1633,7 @@ const page = String.raw`<!doctype html>
   </main>
 
   <script>
-    const preferredTimeKeys = ['Родина', 'работа Оли'];
+    const preferredTimeKeys = ['работа', 'работа 2'];
     const ignoredTimeKeyNames = new Set([
       'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
       'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
@@ -2904,7 +2936,7 @@ const analyticsPage = String.raw`<!doctype html>
       <div class="hero-top">
         <div>
           <h1>Аналитика аренды</h1>
-          <p>Загрузи JSON с объявлениями и получи разбор рынка: средняя и медианная цена, дешёвые и дорогие варианты, полная стоимость въезда, время до Оли, время до Никиты и сбалансированные варианты.</p>
+          <p>Загрузи JSON с объявлениями и получи разбор рынка: средняя и медианная цена, дешёвые и дорогие варианты, полная стоимость въезда, время до работы и сбалансированные варианты.</p>
         </div>
         <nav class="nav">
           <a class="link-btn" href="/">Фильтр</a>
@@ -2919,8 +2951,8 @@ const analyticsPage = String.raw`<!doctype html>
       <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
       <label class="field">Сохранённый список <select id="savedListSelect"></select></label>
       <label class="field">Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
-      <label class="field">Поле Оли <select id="olyaKey"></select></label>
-      <label class="field">Поле Никиты <select id="nikitaKey"></select></label>
+      <label class="field">Поле работы <select id="olyaKey"></select></label>
+      <label class="field">Поле работы 2 <select id="nikitaKey"></select></label>
       <button id="loadSavedBtn" class="action-btn" type="button">Показать сохранённые списки</button>
       <span id="savedListInfo" class="saved-list-info">API: 0 списков</span>
       <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
@@ -2936,7 +2968,7 @@ const analyticsPage = String.raw`<!doctype html>
         </div>
       </div>
       <div class="panel-body">
-        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"Родина":"1 ч 43 мин","работа Оли":"2 ч 17 мин"}]'></textarea>
+        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"работа":"1 ч 43 мин","работа 2":"2 ч 17 мин"}]'></textarea>
       </div>
     </section>
 
@@ -2967,11 +2999,11 @@ const analyticsPage = String.raw`<!doctype html>
 
     <section class="grid analytics-section">
       <section class="panel">
-        <div class="panel-head"><div class="panel-title">Быстрее всего до Оли</div><div id="olyaAvg" class="status"></div></div>
+        <div class="panel-head"><div class="panel-title">Быстрее всего до работы</div><div id="olyaAvg" class="status"></div></div>
         <div class="panel-body" id="olyaTable"></div>
       </section>
       <section class="panel">
-        <div class="panel-head"><div class="panel-title">Быстрее всего до Никиты</div><div id="nikitaAvg" class="status"></div></div>
+        <div class="panel-head"><div class="panel-title">Быстрее всего до работы 2</div><div id="nikitaAvg" class="status"></div></div>
         <div class="panel-body" id="nikitaTable"></div>
       </section>
     </section>
@@ -3124,8 +3156,8 @@ const analyticsPage = String.raw`<!doctype html>
     const tableTitles = {
       cheap: 'Все самые дешёвые варианты',
       expensive: 'Все самые дорогие варианты',
-      olya: 'Все варианты по времени до Оли',
-      nikita: 'Все варианты по времени до Никиты',
+      olya: 'Все варианты по времени до работы',
+      nikita: 'Все варианты по времени до работы 2',
       balanced: 'Все варианты золотой середины',
       score: 'Все варианты по среднему времени',
       value: 'Все варианты по цене за м²',
@@ -3587,7 +3619,7 @@ const analyticsPage = String.raw`<!doctype html>
       if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
       const diff = Math.abs(olya - nikita);
       if (diff === 0) return 'одинаково';
-      const side = olya < nikita ? 'Оле быстрее' : 'Никите быстрее';
+      const side = olya < nikita ? 'Работа быстрее' : 'Работа 2 быстрее';
       if (diff <= 15) return 'почти одинаково, ' + side;
       if (diff <= 30) return 'разница 16-30 мин, ' + side;
       if (diff <= 60) return 'разница 31-60 мин, ' + side;
@@ -3750,8 +3782,26 @@ const analyticsPage = String.raw`<!doctype html>
       els.stage.className = 'stage' + (tone === 'info' ? '' : ' ' + tone);
     }
 
+    function routeFieldLabel(key, fallbackIndex = 0) {
+      const text = String(key || '').toLowerCase();
+      if (/родина|никит|nik/.test(text) || fallbackIndex === 1) return 'работа 2';
+      return 'работа';
+    }
+
+    function displayItemsJson(items) {
+      const routeLabels = new Map(state.timeKeys.map((key, index) => [key, routeFieldLabel(key, index)]));
+      const visibleItems = (Array.isArray(items) ? items : []).map((item) => {
+        const visible = {};
+        Object.entries(item || {}).forEach(([key, value]) => {
+          visible[routeLabels.get(key) || key] = value;
+        });
+        return visible;
+      });
+      return JSON.stringify(visibleItems, null, 2);
+    }
+
     function fillTimeSelects() {
-      const options = state.timeKeys.map((key) => '<option value="' + esc(key) + '">' + esc(key) + '</option>').join('');
+      const options = state.timeKeys.map((key, index) => '<option value="' + esc(key) + '">' + esc(routeFieldLabel(key, index)) + '</option>').join('');
       els.olyaKey.innerHTML = options;
       els.nikitaKey.innerHTML = options;
       const olya = state.timeKeys.find((key) => /оли|ol/i.test(key)) || state.timeKeys[1] || state.timeKeys[0] || '';
@@ -3784,8 +3834,8 @@ const analyticsPage = String.raw`<!doctype html>
         ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
         ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
         ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-        ['Среднее до Оли', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
-        ['Среднее до Никиты', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
+        ['Среднее до работы', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
+        ['Среднее до работы 2', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
         ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
         ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
         ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
@@ -3808,7 +3858,7 @@ const analyticsPage = String.raw`<!doctype html>
       const blocks = [
         ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
         ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
-        ['Самый быстрый до Оли', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+        ['Самый быстрый до работы', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
         ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
       ];
       els.insights.innerHTML = blocks.map((block) => '<article class="insight"><b>' + esc(block[0]) + '</b><div>' + block[1] + '</div></article>').join('');
@@ -3828,7 +3878,7 @@ const analyticsPage = String.raw`<!doctype html>
         row.commission ? ['Комиссия', rub(row.commission)] : null,
         row.utilities ? ['ЖКУ', rub(row.utilities)] : null,
         (Number.isFinite(row.olya) || Number.isFinite(row.nikita))
-          ? ['Дорога', [Number.isFinite(row.olya) ? 'Оля ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Никита ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
+          ? ['Дорога', [Number.isFinite(row.olya) ? 'Работа ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Работа 2 ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
           : null,
       ].filter(Boolean);
       const title = row.url
@@ -3892,8 +3942,8 @@ const analyticsPage = String.raw`<!doctype html>
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
         { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
-        { label: 'До Оли', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
-        { label: 'До Никиты', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+        { label: 'До работы', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        { label: 'До работы 2', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
       ];
       const cheap = state.rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
@@ -3951,8 +4001,8 @@ const analyticsPage = String.raw`<!doctype html>
         ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
       ];
       const keys = [
-        ['Оля', 'olya'],
-        ['Никита', 'nikita'],
+        ['Работа', 'olya'],
+        ['Работа 2', 'nikita'],
         ['Оба маршрута', 'both'],
       ];
       const rows = [];
@@ -4260,7 +4310,7 @@ const analyticsPage = String.raw`<!doctype html>
       renderTables();
       renderBuckets();
       openTableFromUrl();
-      setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + els.olyaKey.value + ', ' + els.nikitaKey.value + '.', 'ok');
+      setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: работа, работа 2.', 'ok');
       setStage('Аналитика построена', 'ok');
       updateImageButtonState();
     }
@@ -4347,19 +4397,21 @@ const analyticsPage = String.raw`<!doctype html>
       }
     }
 
-    function loadSelectedSavedList() {
+    async function loadSelectedSavedList() {
       const selectedId = els.savedListSelect.value;
       const selected = state.savedDatasets.find((dataset) => dataset.id === selectedId);
       if (!selected) return;
-      els.jsonInput.value = JSON.stringify(selected.items || [], null, 2);
-      state.items = selected.items || [];
-      state.timeKeys = detectTimeKeys(state.items);
-      fillTimeSelects();
-      prepareRows();
-      renderAll();
-      const updatedText = selected.updatedAt ? ' Обновлено: ' + new Date(selected.updatedAt).toLocaleString('ru-RU') + '.' : '';
-      setStatus('Загружен список "' + selected.name + '": ' + state.items.length + ' объектов.' + updatedText, 'ok');
-      setStage('Список загружен', 'ok');
+      try {
+        setStage('Загружаю список', 'info');
+        const data = await loadAnalyticsView([], { source: 'saved', datasetId: selectedId });
+        els.jsonInput.value = displayItemsJson(data.items || []);
+        const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
+        setStatus('Загружен список "' + (data.activeName || selected.name) + '": ' + state.items.length + ' объектов.' + updatedText, 'ok');
+        setStage('Список загружен', 'ok');
+      } catch (error) {
+        setStatus('Список не загружен: ' + (error?.message || String(error)), 'warn');
+        setStage('Ошибка загрузки списка', 'bad');
+      }
     }
 
     async function handleFile() {
@@ -4399,8 +4451,8 @@ const analyticsPage = String.raw`<!doctype html>
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
         { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
-        { label: 'До Оли', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
-        { label: 'До Никиты', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+        { label: 'До работы', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        { label: 'До работы 2', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
       ];
 
       const tableColumns = {
@@ -4436,17 +4488,23 @@ const analyticsPage = String.raw`<!doctype html>
       renderAll();
     }
 
-    async function loadAnalyticsView(items) {
+    async function loadAnalyticsView(items, options = {}) {
+      const payload = {
+        timeKeys: state.timeKeys,
+        olyaKey: els.olyaKey.value,
+        nikitaKey: els.nikitaKey.value,
+        fastLimit: Number(els.fastLimit.value || 90),
+      };
+      if (Array.isArray(items) && items.length) {
+        payload.items = items;
+      }
+      if (options.source) payload.source = options.source;
+      if (options.datasetId) payload.datasetId = options.datasetId;
+
       const response = await fetch('/api/analytics-run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items,
-          timeKeys: state.timeKeys,
-          olyaKey: els.olyaKey.value,
-          nikitaKey: els.nikitaKey.value,
-          fastLimit: Number(els.fastLimit.value || 90),
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await readJsonResponse(response, 'Не удалось построить аналитику на сервере.');
       applyAnalyticsView(data);
@@ -4519,7 +4577,7 @@ const analyticsPage = String.raw`<!doctype html>
       renderCommuteIssues();
       openTableFromUrl();
       if (state.analyticsView) {
-        setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: ' + (els.olyaKey.value || '-') + ', ' + (els.nikitaKey.value || '-') + '.', 'ok');
+        setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: работа, работа 2.', 'ok');
       }
     }
 
@@ -4557,19 +4615,31 @@ const analyticsPage = String.raw`<!doctype html>
       const parsed = unwrapJson(JSON.parse(text));
       state.items = parsed;
       els.jsonInput.value = text;
+      state.timeKeys = detectTimeKeys(parsed);
+      fillTimeSelects();
       await loadAnalyticsView(parsed);
     }
 
     async function loadSavedAnalyticsData() {
       try {
-        const response = await fetch('/api/analytics-data');
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить сохранённый JSON.');
+        setStage('Загружаю готовую аналитику', 'info');
+        setStatus('Строю аналитику из сохранённого JSON на сервере...', 'info');
+        const data = await loadAnalyticsView([], { source: 'saved' });
         if (!Array.isArray(data.items) || !data.items.length) return;
-        els.jsonInput.value = JSON.stringify(data.items, null, 2);
-        await loadAnalyticsView(data.items);
+        els.jsonInput.value = displayItemsJson(data.items);
+        state.savedDatasets = Array.isArray(data.datasets) ? data.datasets : [];
+        if (els.savedListInfo) {
+          const count = state.savedDatasets.length;
+          els.savedListInfo.textContent = count ? 'API: ' + count + ' ' + pluralizeRu(count, 'список', 'списка', 'списков') : 'API: 1 список';
+        }
+        if (els.savedListSelect && state.savedDatasets.length) {
+          els.savedListSelect.innerHTML = ['<option value="">Выбери список</option>']
+            .concat(state.savedDatasets.map((dataset) => '<option value="' + esc(dataset.id) + '"' + (dataset.id === data.activeId ? ' selected' : '') + '>' + esc(dataset.name) + ' (' + dataset.count + ')</option>'))
+            .join('');
+        }
         const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
-        setStatus('Загружен сохранённый JSON: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+        setStatus('Загружена аналитика: ' + data.items.length + ' объектов.' + updatedText, 'ok');
+        setStage('Аналитика построена', 'ok');
       } catch (error) {
         setStatus('Сохранённый JSON не загружен: ' + (error?.message || String(error)), 'warn');
       }
@@ -4610,7 +4680,7 @@ const analyticsPage = String.raw`<!doctype html>
     els.loadSavedBtn.addEventListener('click', () => { void loadSavedAnalyticsData(); });
     els.savedListSelect.addEventListener('change', () => {
       if (els.savedListSelect.value) {
-        loadSelectedSavedList();
+        void loadSelectedSavedList();
       }
     });
     els.analyzeBtn.addEventListener('click', () => { void handleAnalyze(); });
