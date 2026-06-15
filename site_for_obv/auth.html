@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход</title>
+  <style>
+    :root{
+      --bg:#f4f6f8;
+      --panel:#fff;
+      --text:#17202a;
+      --muted:#64748b;
+      --line:#dce4ee;
+      --accent:#0f6fde;
+      --red:#b42318;
+      --shadow:0 10px 24px rgba(26,39,58,.07);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45}
+    header{background:#fff;border-bottom:1px solid var(--line)}
+    .head{max-width:980px;margin:0 auto;padding:18px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}
+    h1{margin:0;font-size:26px;letter-spacing:0}
+    .back{color:var(--accent);font-weight:850;text-decoration:none}
+    main{max-width:980px;margin:0 auto;padding:28px 24px 40px}
+    .shell{display:grid;grid-template-columns:.9fr 1.1fr;gap:18px;align-items:start}
+    .intro,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:22px}
+    .intro h2,.panel h2{font-size:22px;margin:0 0 8px}
+    .intro p{margin:0;color:var(--muted)}
+    form{display:grid;gap:12px;margin-top:16px}
+    label{display:grid;gap:6px;font-weight:850}
+    input{height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;color:var(--text);background:#fff}
+    button,.switchLink{display:inline-flex;align-items:center;justify-content:center;min-height:42px;border-radius:8px;border:1px solid var(--line);padding:0 14px;font-weight:850;text-decoration:none;cursor:pointer}
+    button{background:var(--accent);border-color:var(--accent);color:#fff}
+    .switchLink{background:#fff;color:var(--text)}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+    .error{color:var(--red);font-weight:850;margin-top:10px}
+    @media(max-width:760px){
+      .head{display:block;padding:18px 14px}
+      .back{display:inline-block;margin-top:10px}
+      main{padding:14px 10px 30px}
+      .shell{grid-template-columns:1fr}
+      .actions{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head">
+      <h1 id="pageTitle">Вход</h1>
+      <a class="back" href="/">На главную</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="shell">
+      <section class="intro">
+        <h2 id="introTitle">Ваш список квартир</h2>
+        <p id="introText">Войдите, чтобы открыть сохраненные объекты, загрузить новый JSON-массив и управлять только своими объявлениями.</p>
+      </section>
+
+      <section class="panel">
+        <h2 id="formTitle">Вход</h2>
+        <form id="authForm">
+          <label>
+            Email
+            <input id="email" type="email" autocomplete="email" required>
+          </label>
+          <label>
+            Пароль
+            <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+          </label>
+          <div class="actions">
+            <button id="submitBtn" type="submit">Войти</button>
+            <a class="switchLink" id="switchLink" href="/register">Регистрация</a>
+          </div>
+        </form>
+        <div class="error" id="error" hidden></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const mode = location.pathname === "/register" ? "register" : "login";
+    const params = new URLSearchParams(location.search);
+    const next = params.get("next") || "/";
+    const pageTitle = document.querySelector("#pageTitle");
+    const introTitle = document.querySelector("#introTitle");
+    const introText = document.querySelector("#introText");
+    const formTitle = document.querySelector("#formTitle");
+    const submitBtn = document.querySelector("#submitBtn");
+    const switchLink = document.querySelector("#switchLink");
+    const form = document.querySelector("#authForm");
+    const email = document.querySelector("#email");
+    const password = document.querySelector("#password");
+    const errorBox = document.querySelector("#error");
+
+    applyMode();
+    form.addEventListener("submit", submitAuth);
+
+    async function submitAuth(event) {
+      event.preventDefault();
+      errorBox.hidden = true;
+      submitBtn.disabled = true;
+      try {
+        const response = await fetch(`/api/${mode}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.value, password: password.value }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Не удалось выполнить действие");
+        window.location.href = safeNext(next);
+      } catch (error) {
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    function applyMode() {
+      const isRegister = mode === "register";
+      document.title = isRegister ? "Регистрация" : "Вход";
+      pageTitle.textContent = isRegister ? "Регистрация" : "Вход";
+      formTitle.textContent = isRegister ? "Создать аккаунт" : "Войти в аккаунт";
+      submitBtn.textContent = isRegister ? "Зарегистрироваться" : "Войти";
+      switchLink.textContent = isRegister ? "Уже есть аккаунт" : "Регистрация";
+      switchLink.href = isRegister ? `/login?next=${encodeURIComponent(next)}` : `/register?next=${encodeURIComponent(next)}`;
+      introTitle.textContent = isRegister ? "Создайте личное пространство" : "Ваш список квартир";
+      introText.textContent = isRegister
+        ? "После регистрации вы сможете загружать свои массивы объектов, удалять лишние объявления и видеть только свои данные."
+        : "Войдите, чтобы открыть сохраненные объекты, загрузить новый JSON-массив и управлять только своими объявлениями.";
+    }
+
+    function safeNext(value) {
+      return value.startsWith("/") && !value.startsWith("//") ? value : "/";
+    }
+  </script>
+</body>
+</html>

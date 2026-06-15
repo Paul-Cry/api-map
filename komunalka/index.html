@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Калькулятор коммуналки</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="summary" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Южное Бутово · квартира 102</p>
+          <h1 id="page-title">Сколько уже нужно оплатить</h1>
+          <p class="lead">
+            Введите текущие показания перед подачей. Вода и электричество считаются
+            по тарифам, действующим на момент подачи.
+          </p>
+        </div>
+
+        <div class="total-card">
+          <span>Итого к оплате</span>
+          <strong id="grandTotal">0,00 ₽</strong>
+          <small id="lastSaved">Данные сохраняются в этом браузере</small>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="Калькулятор">
+        <form class="calculator" id="calculator">
+          <div class="toolbar">
+            <label class="date-field">
+              <span>Дата подачи</span>
+              <input id="readingDate" name="readingDate" type="date" />
+            </label>
+            <button class="ghost" type="button" id="resetButton">Сбросить</button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Ресурс</th>
+                  <th scope="col">Старт</th>
+                  <th scope="col">Сейчас</th>
+                  <th scope="col">Расход</th>
+                  <th scope="col">Тариф</th>
+                  <th scope="col">Сумма</th>
+                </tr>
+              </thead>
+              <tbody id="resourceRows"></tbody>
+            </table>
+          </div>
+        </form>
+
+        <aside class="breakdown" aria-labelledby="breakdown-title">
+          <h2 id="breakdown-title">Разбивка</h2>
+          <div class="meter-visual" aria-hidden="true">
+            <div class="dial dial-electric">
+              <span></span>
+            </div>
+            <div class="dial dial-water">
+              <span></span>
+            </div>
+          </div>
+          <dl id="breakdownList"></dl>
+          <p class="note">
+            Водоотведение считается по сумме холодной и горячей воды. Если текущее
+            показание меньше стартового, расход по этой строке считается как 0.
+          </p>
+        </aside>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

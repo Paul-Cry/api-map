@@ -9,6 +9,8 @@
 // @match        *://*.yandex.kz/maps/*
 // @match        *://*.yandex.ru/maps/*
 // @match        *://*.yandex.com/maps/*
+// @match        http://62.109.18.11:3000/worker*
+// @match        https://62.109.18.11:3000/worker*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
@@ -31,6 +33,11 @@
   const POLL_MS = 100;
   const ROUTE_REQUEST_DELAY_MS = 250;
   const WORKER_POLL_MS = 5000;
+
+  if (/^https?:\/\/62\.109\.18\.11:3000\/worker\b/i.test(window.location.href)) {
+    installWorkerDashboardAddressUi();
+    return;
+  }
 
   let isProcessing = false;
   let isWorkerPolling = false;
@@ -427,13 +434,53 @@
     }, delayMs);
   }
 
-  function createJobsFromInput(text) {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) {
-      throw new Error('Нужен JSON-массив объектов.');
+  function itemsFromAddressLines(text) {
+    return normalizeText(text)
+      ? String(text)
+        .split(/\r?\n/)
+        .map((line) => normalizeText(line))
+        .filter(Boolean)
+        .map((address, index) => ({
+          title: `Address ${index + 1}`,
+          address,
+        }))
+      : [];
+  }
+
+  function normalizeInputItems(parsed) {
+    if (Array.isArray(parsed)) {
+      return parsed.map((item, index) => {
+        if (typeof item === 'string') {
+          return {
+            title: `Address ${index + 1}`,
+            address: normalizeText(item),
+          };
+        }
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          return { ...item };
+        }
+        throw new Error('JSON array items must be objects or address strings.');
+      }).filter((item) => getAddress(item));
     }
 
-    const items = parsed.map((item) => ({ ...item }));
+    if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.items)) return normalizeInputItems(parsed.items);
+      if (Array.isArray(parsed.addresses)) return normalizeInputItems(parsed.addresses);
+      if (typeof parsed.address === 'string') return normalizeInputItems([parsed.address]);
+      if (typeof parsed.text === 'string') return itemsFromAddressLines(parsed.text);
+    }
+
+    throw new Error('Need a JSON array, an addresses array, or one address per line.');
+  }
+
+  function createJobsFromInput(text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = itemsFromAddressLines(text);
+    }
+    const items = normalizeInputItems(parsed);
     const jobs = buildJobs(items);
 
     if (!jobs.length) {
@@ -493,7 +540,7 @@
 
   function startRemoteJob(job) {
     const items = Array.isArray(job?.items) ? job.items : [];
-    const { jobs } = createJobsFromInput(JSON.stringify(items));
+    const { items: normalizedItems, jobs } = createJobsFromInput(JSON.stringify(items));
     const [firstJob, ...restJobs] = jobs;
     stopSequence += 1;
     if (currentJobTimer) window.clearTimeout(currentJobTimer);
@@ -508,7 +555,7 @@
         jobId: job.jobId,
         batchId: job.batchId,
       },
-      items: items.map((item) => ({ ...item })),
+      items: normalizedItems,
       jobs: restJobs,
       currentJob: firstJob,
       done: 0,
@@ -1281,6 +1328,227 @@
   function setStatus(text) {
     const node = document.querySelector('#codex-yandex-transit-status');
     if (node) node.textContent = text;
+  }
+
+  function setWorkerDashboardMessage(text) {
+    const node = document.querySelector('#message');
+    if (node) node.textContent = text;
+  }
+
+  function installWorkerDashboardAddressUi() {
+    const mount = () => {
+      if (document.querySelector('#codex-worker-address-root')) return;
+
+      const form = document.querySelector('.form');
+      if (!form) {
+        window.setTimeout(mount, 250);
+        return;
+      }
+
+      const style = document.createElement('style');
+      style.textContent = `
+        #codex-worker-address-root {
+          display: grid;
+          gap: 10px;
+          padding: 12px;
+          border: 1px solid var(--line, #293342);
+          border-radius: 8px;
+          background: rgba(23,31,43,0.55);
+        }
+        .codex-worker-address-row {
+          display: grid;
+          grid-template-columns: 1fr 150px;
+          gap: 8px;
+        }
+        #codex-worker-address-input {
+          width: 100%;
+          min-height: 40px;
+          border-radius: 6px;
+          border: 1px solid var(--line, #293342);
+          background: var(--panel-2, #171f2b);
+          color: var(--text, #e8edf5);
+          padding: 8px 10px;
+          font: inherit;
+        }
+        #codex-worker-address-add,
+        #codex-worker-address-run {
+          background: #44d17d;
+          color: #062313;
+        }
+        #codex-worker-address-list {
+          display: grid;
+          gap: 6px;
+          max-height: 180px;
+          overflow: auto;
+        }
+        .codex-worker-address-item {
+          display: grid;
+          grid-template-columns: 1fr 34px;
+          gap: 8px;
+          align-items: center;
+          min-height: 36px;
+          padding: 6px 8px;
+          border: 1px solid var(--line, #293342);
+          border-radius: 6px;
+          background: var(--panel-2, #171f2b);
+        }
+        .codex-worker-address-item span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .codex-worker-address-remove {
+          min-width: 34px;
+          width: 34px;
+          min-height: 28px;
+          padding: 0;
+          background: #7a1f1f;
+          color: #fff;
+        }
+        @media (max-width: 700px) {
+          .codex-worker-address-row {
+            grid-template-columns: 1fr;
+          }
+        }
+      `;
+      document.head.appendChild(style);
+
+      const root = document.createElement('div');
+      root.id = 'codex-worker-address-root';
+
+      const title = document.createElement('strong');
+      title.textContent = 'Быстрый запуск по адресам';
+
+      const row = document.createElement('div');
+      row.className = 'codex-worker-address-row';
+
+      const input = document.createElement('input');
+      input.id = 'codex-worker-address-input';
+      input.type = 'text';
+      input.placeholder = 'Москва, улица Генерала Тюленева, 9';
+
+      const addButton = document.createElement('button');
+      addButton.id = 'codex-worker-address-add';
+      addButton.type = 'button';
+      addButton.textContent = 'Добавить адрес';
+
+      const list = document.createElement('div');
+      list.id = 'codex-worker-address-list';
+
+      const counter = document.createElement('div');
+      counter.className = 'muted';
+
+      const button = document.createElement('button');
+      button.id = 'codex-worker-address-run';
+      button.type = 'button';
+      button.textContent = 'Запустить адреса';
+      button.disabled = true;
+
+      const note = document.createElement('div');
+      note.className = 'muted';
+      note.textContent = 'Воркеры получат эти адреса как обычные задания и построят маршруты.';
+
+      const addresses = [];
+
+      const renderAddressList = () => {
+        list.innerHTML = '';
+        button.disabled = addresses.length === 0;
+        counter.textContent = addresses.length
+          ? `Добавлено адресов: ${addresses.length}`
+          : 'Добавь хотя бы один адрес.';
+
+        addresses.forEach((address, index) => {
+          const item = document.createElement('div');
+          item.className = 'codex-worker-address-item';
+
+          const text = document.createElement('span');
+          text.title = address;
+          text.textContent = address;
+
+          const removeButton = document.createElement('button');
+          removeButton.type = 'button';
+          removeButton.className = 'codex-worker-address-remove';
+          removeButton.textContent = 'x';
+          removeButton.title = 'Удалить адрес';
+          removeButton.addEventListener('click', () => {
+            addresses.splice(index, 1);
+            renderAddressList();
+          });
+
+          item.appendChild(text);
+          item.appendChild(removeButton);
+          list.appendChild(item);
+        });
+      };
+
+      const addAddress = () => {
+        const address = normalizeText(input.value);
+        if (!address) {
+          setWorkerDashboardMessage('Введите адрес.');
+          input.focus();
+          return;
+        }
+
+        if (!addresses.includes(address)) {
+          addresses.push(address);
+        }
+        input.value = '';
+        input.focus();
+        renderAddressList();
+        setWorkerDashboardMessage(`Адрес добавлен. Всего: ${addresses.length}.`);
+      };
+
+      row.appendChild(input);
+      row.appendChild(addButton);
+      root.appendChild(title);
+      root.appendChild(row);
+      root.appendChild(list);
+      root.appendChild(counter);
+      root.appendChild(button);
+      root.appendChild(note);
+      form.appendChild(root);
+
+      addButton.addEventListener('click', addAddress);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          addAddress();
+        }
+      });
+
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const items = normalizeInputItems(addresses);
+          if (!items.length) throw new Error('Адреса не найдены.');
+          setWorkerDashboardMessage('Отправляю адреса в очередь...');
+
+          const response = await fetch('/api/run', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ items }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Не удалось запустить обработку.');
+          setWorkerDashboardMessage(`Запущено адресов: ${items.length}. Jobs: ${data.jobsQueued}. Batch: ${data.batchId}`);
+          addresses.length = 0;
+          renderAddressList();
+        } catch (error) {
+          setWorkerDashboardMessage(error?.message || String(error));
+        } finally {
+          button.disabled = addresses.length === 0;
+        }
+      });
+
+      renderAddressList();
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', mount, { once: true });
+    } else {
+      mount();
+    }
   }
 
   function ensureUi() {

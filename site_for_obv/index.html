@@ -25,13 +25,23 @@
     h1{margin:0 0 4px;font-size:27px;letter-spacing:0}
     .lead{margin:0;color:var(--muted)}
     .adminLink{display:inline-flex;align-items:center;min-height:38px;padding:0 14px;border-radius:8px;background:var(--text);color:#fff;text-decoration:none;font-weight:800;white-space:nowrap}
+    .userBar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    .userEmail{color:var(--muted);font-weight:800}
+    button{height:38px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--text);padding:0 12px;font-weight:800;cursor:pointer}
+    button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    .welcomePanel{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:22px;margin-bottom:14px;max-width:760px}
+    .welcomePanel h2{font-size:22px;margin:0 0 8px}
+    .welcomePanel p{color:var(--muted);margin:0 0 16px}
+    .welcomeActions{display:flex;gap:10px;flex-wrap:wrap}
+    .welcomeActions a{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 14px;border-radius:8px;border:1px solid var(--line);text-decoration:none;color:var(--text);font-weight:850}
+    .welcomeActions a.primary{background:var(--accent);border-color:var(--accent);color:#fff}
     main{max-width:1440px;margin:0 auto;padding:16px 24px 36px}
     .stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
     .pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:#334155}
     .toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 180px 220px;gap:10px;margin-bottom:12px}
     .toolbar input,.toolbar select{height:42px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 12px}
     .tableShell{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:auto}
-    table{border-collapse:separate;border-spacing:0;width:100%;min-width:1040px}
+    table{border-collapse:separate;border-spacing:0;width:100%;min-width:1140px}
     th,td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:middle;text-align:left}
     th{font-size:11px;text-transform:uppercase;color:#52606d;background:#f9fbfd;position:sticky;top:75px;z-index:2}
     tbody tr:hover{background:#fbfdff}
@@ -52,11 +62,14 @@
     .timeLabel{display:block;color:#52606d;font-size:11px;text-transform:uppercase;font-weight:850}
     .timeValue{display:block;color:#0f3768;font-size:18px;font-weight:900;line-height:1.2;margin-top:2px;white-space:nowrap}
     .openBtn{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:7px;background:var(--accent);color:#fff;text-decoration:none;font-weight:850}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .deleteBtn{min-height:34px;height:auto;border-color:#f0c7c3;background:#fff6f5;color:var(--red)}
     .empty{background:#fff;border:1px dashed var(--line);border-radius:8px;padding:28px;text-align:center;color:var(--muted)}
     @media(max-width:860px){
       header{position:static}
       .head{display:block;padding:18px 14px}
       .adminLink{margin-top:14px}
+      .userBar{justify-content:flex-start;margin-top:10px}
       .toolbar{grid-template-columns:1fr}
       main{padding:12px 10px 28px}
       .tableShell{border:0;background:transparent;box-shadow:none;overflow:visible}
@@ -89,8 +102,17 @@
   </header>
 
   <main>
-    <div class="stats" id="stats"></div>
-    <div class="toolbar">
+    <section class="welcomePanel" id="welcomePanel" hidden>
+      <h2>Войдите в аккаунт</h2>
+      <p>После входа здесь появится только ваш список квартир. Регистрация и вход вынесены на отдельные страницы.</p>
+      <div class="welcomeActions">
+        <a class="primary" href="/login">Войти</a>
+        <a href="/register">Зарегистрироваться</a>
+      </div>
+    </section>
+
+    <div class="stats" id="stats" hidden></div>
+    <div class="toolbar" hidden>
       <input id="q" placeholder="Поиск: адрес, метро, условия">
       <select id="grade">
         <option value="">Все оценки</option>
@@ -108,7 +130,7 @@
       </select>
     </div>
 
-    <section class="tableShell" id="tableShell">
+    <section class="tableShell" id="tableShell" hidden>
       <table>
         <thead>
           <tr>
@@ -119,6 +141,7 @@
             <th>Условия</th>
             <th>Время</th>
             <th>Ссылка</th>
+            <th>Действия</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -128,8 +151,9 @@
   </main>
 
   <script>
-    const state = { items: [] };
+    const state = { items: [], user: null };
     const rows = document.querySelector("#rows");
+    const welcomePanel = document.querySelector("#welcomePanel");
     const stats = document.querySelector("#stats");
     const empty = document.querySelector("#empty");
     const tableShell = document.querySelector("#tableShell");
@@ -137,13 +161,76 @@
     const grade = document.querySelector("#grade");
     const sort = document.querySelector("#sort");
 
-    load();
+    const userBar = document.createElement("div");
+    userBar.className = "userBar";
+    userBar.innerHTML = `
+      <span class="userEmail" id="userEmail"></span>
+      <a class="adminLink" id="loginLink" href="/login">Войти</a>
+      <button type="button" id="logoutBtn" hidden>Выйти</button>`;
+    document.querySelector(".head").append(userBar);
+
+    const userEmail = document.querySelector("#userEmail");
+    const loginLink = document.querySelector("#loginLink");
+    const logoutBtn = document.querySelector("#logoutBtn");
+
+    init();
     q.addEventListener("input", render);
     grade.addEventListener("change", render);
     sort.addEventListener("change", render);
+    logoutBtn.addEventListener("click", logout);
+    rows.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-delete-id]");
+      if (!button) return;
+      await deleteListing(button.dataset.deleteId);
+    });
+
+    async function init() {
+      const response = await fetch("/api/me");
+      const data = await response.json();
+      state.user = data.user || null;
+      renderAuth();
+      if (state.user) await load();
+    }
+
+    async function logout() {
+      await fetch("/api/logout", { method: "POST" });
+      state.user = null;
+      state.items = [];
+      renderAuth();
+      render();
+    }
+
+    async function deleteListing(id) {
+      if (!confirm("Удалить этот объект из вашего списка?")) return;
+      const response = await fetch(`/api/listings/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        alert(data.error || "Не удалось удалить объект");
+        return;
+      }
+      await load();
+    }
+
+    function renderAuth() {
+      welcomePanel.hidden = Boolean(state.user);
+      userEmail.textContent = state.user ? state.user.email : "";
+      loginLink.hidden = Boolean(state.user);
+      logoutBtn.hidden = !state.user;
+      document.querySelector(".toolbar").hidden = !state.user;
+      stats.hidden = !state.user;
+      if (!state.user) {
+        tableShell.hidden = true;
+        empty.hidden = true;
+      }
+    }
 
     async function load() {
       const response = await fetch("/api/listings");
+      if (response.status === 401) {
+        state.user = null;
+        renderAuth();
+        return;
+      }
       const data = await response.json();
       state.items = Array.isArray(data.items) ? data.items : [];
       renderStats(data);
@@ -172,12 +259,14 @@
       rows.innerHTML = items.map(rowTemplate).join("");
       empty.hidden = items.length > 0;
       tableShell.hidden = items.length === 0;
+      renderAuth();
     }
 
     function rowTemplate(item, index) {
       const grade = item.grade || "-";
       const price = item.monthly ? money(item.monthly) : item.price || "-";
       const link = item.url ? `<a class="openBtn" href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">Открыть</a>` : "<span class='muted'>Нет ссылки</span>";
+      const actions = `<div class="actions"><button class="deleteBtn" type="button" data-delete-id="${escapeAttr(item.id)}">Удалить</button></div>`;
       return `<tr>
         <td data-label="#"><span class="num">${index + 1}</span></td>
         <td data-label="Оценка"><span class="grade ${escapeAttr(grade)}">${escapeHtml(grade)}</span>${item.score ? `<span class="muted">${item.score}</span>` : ""}</td>
@@ -196,6 +285,7 @@
         </td>
         <td data-label="Время" class="timeCell">${timeTemplate(item)}</td>
         <td data-label="Ссылка">${link}</td>
+        <td data-label="Действия">${actions}</td>
       </tr>`;
     }
 

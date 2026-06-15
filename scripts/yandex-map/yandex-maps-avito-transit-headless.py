@@ -153,6 +153,51 @@ def get_address(item: dict[str, Any]) -> str:
     return normalize_text(item.get("adress") or item.get("address") or item.get("адрес") or "")
 
 
+def items_from_address_lines(text: str) -> list[dict[str, Any]]:
+    lines = [normalize_text(line) for line in str(text or "").splitlines()]
+    return [
+        {
+            "title": f"Address {index + 1}",
+            "address": address,
+        }
+        for index, address in enumerate(line for line in lines if line)
+    ]
+
+
+def normalize_input_items(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        items: list[dict[str, Any]] = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                candidate = deepcopy(item)
+            elif isinstance(item, str):
+                candidate = {
+                    "title": f"Address {index + 1}",
+                    "address": normalize_text(item),
+                }
+            else:
+                raise ValueError("JSON array items must be objects or address strings.")
+
+            if get_address(candidate):
+                items.append(candidate)
+        return items
+
+    if isinstance(value, dict):
+        if isinstance(value.get("items"), list):
+            return normalize_input_items(value["items"])
+        if isinstance(value.get("addresses"), list):
+            return normalize_input_items(value["addresses"])
+        if isinstance(value.get("address"), str):
+            return normalize_input_items([value["address"]])
+        if isinstance(value.get("text"), str):
+            return items_from_address_lines(value["text"])
+
+    if isinstance(value, str):
+        return items_from_address_lines(value)
+
+    raise ValueError("Need a JSON array, an addresses array, or one address per line.")
+
+
 def clean_route_address(address: str) -> str:
     text = normalize_text(address)
     if not text:
@@ -211,16 +256,11 @@ def load_items(source: str) -> list[dict[str, Any]]:
     except OSError:
         text = source
 
-    parsed = json.loads(text)
-    if not isinstance(parsed, list):
-        raise ValueError("Нужен JSON-массив объектов.")
-
-    items: list[dict[str, Any]] = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            raise ValueError("Каждый элемент JSON-массива должен быть объектом.")
-        items.append(deepcopy(item))
-    return items
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = text
+    return normalize_input_items(parsed)
 
 
 def encode_route_url(origin: str, destination: str) -> str:
@@ -752,7 +792,7 @@ async def run_api_worker(
                 continue
 
             job_id = str(job.get("jobId") or "").strip()
-            items = job.get("items") if isinstance(job.get("items"), list) else []
+            items = normalize_input_items(job)
             print(f"Received API job {job_id}: {len(items)} items.")
 
             try:
@@ -774,7 +814,7 @@ async def run_api_worker(
 
             try:
                 result_items = await process_items(
-                    items=[item for item in items if isinstance(item, dict)],
+                    items=items,
                     output_path=None,
                     timeout_ms=timeout_ms,
                     delay_ms=delay_ms,
@@ -1019,8 +1059,7 @@ async def run_api_worker_connected(
                 continue
 
             job_id = str(job.get("jobId") or "").strip()
-            raw_items = job.get("items") if isinstance(job.get("items"), list) else []
-            items = [item for item in raw_items if isinstance(item, dict)]
+            items = normalize_input_items(job)
 
             await set_state(tracker=None, status="busy", current_job_id=job_id, last_error="")
             print(f"Received API job {job_id}: {len(items)} items.")

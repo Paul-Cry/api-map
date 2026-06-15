@@ -66,6 +66,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/login") {
+      await proxy(req, res, services.feed, "/login" + url.search);
+      return;
+    }
+
+    if (url.pathname === "/register") {
+      await proxy(req, res, services.feed, "/register" + url.search);
+      return;
+    }
+
     if (url.pathname === "/merge") {
       await proxy(req, res, services.filter, "/merge" + url.search);
       return;
@@ -96,7 +106,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/listings" || url.pathname === "/api/import") {
+    if (
+      url.pathname === "/api/me" ||
+      url.pathname === "/api/login" ||
+      url.pathname === "/api/register" ||
+      url.pathname === "/api/logout" ||
+      url.pathname === "/api/listings" ||
+      url.pathname.startsWith("/api/listings/") ||
+      url.pathname === "/api/import"
+    ) {
       await proxy(req, res, services.feed, url.pathname + url.search);
       return;
     }
