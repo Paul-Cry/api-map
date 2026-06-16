@@ -1,17 +1,34 @@
-import { sendJson } from "../http.js";
+import { readJsonPayload, sendJson } from "../http.js";
 import { requireUser } from "../middleware/auth.js";
 import {
+  addUserListing,
   clearUserListings,
   deleteUserListing,
   getUserListings,
+  getUserListingsMeta,
   importUserListings,
 } from "../services/listingsService.js";
 
 export async function handleListingRoutes(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/listings/meta") {
+    const user = requireUser(req);
+    const data = getUserListingsMeta(user.id);
+    sendJson(res, { ...data, user });
+    return true;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/listings") {
     const user = requireUser(req);
     const data = getUserListings(user.id);
     sendJson(res, { ...data, user });
+    return true;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/listings") {
+    const user = requireUser(req);
+    const input = await readJsonPayload(req);
+    const result = addUserListing(user.id, input);
+    sendJson(res, { ok: true, ...result }, 201);
     return true;
   }
 

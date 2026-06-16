@@ -43,14 +43,30 @@ export function getListingsBundle(userId) {
   };
 }
 
+export function getListingsMeta(userId) {
+  const meta = getDb()
+    .prepare("SELECT updated_at AS updatedAt, source_file AS sourceFile FROM listing_meta WHERE user_id = ?")
+    .get(userId) || { updatedAt: null, sourceFile: null };
+  const count = getDb()
+    .prepare("SELECT COUNT(*) AS count FROM listings WHERE user_id = ?")
+    .get(userId).count;
+
+  return {
+    updatedAt: meta.updatedAt || null,
+    sourceFile: meta.sourceFile || null,
+    count,
+  };
+}
+
 export function replaceListings(userId, items, sourceFile, updatedAt) {
   const db = getDb();
   db.exec("BEGIN");
   try {
     deleteListings(userId);
-    insertListings(userId, items);
+    const result = insertListings(userId, items);
     setListingMeta(userId, sourceFile, updatedAt);
     db.exec("COMMIT");
+    return result;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -62,9 +78,25 @@ export function appendListings(userId, items, sourceFile, updatedAt) {
   const currentCount = countListings(userId);
   db.exec("BEGIN");
   try {
-    insertListings(userId, items, currentCount);
+    const result = insertListings(userId, items, currentCount);
     setListingMeta(userId, sourceFile, updatedAt);
     db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function addListing(userId, item, updatedAt) {
+  const db = getDb();
+  const position = countListings(userId);
+  db.exec("BEGIN");
+  try {
+    const result = insertListings(userId, [item], position);
+    touchListingMeta(userId, updatedAt);
+    db.exec("COMMIT");
+    return result;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -142,11 +174,23 @@ function insertListings(userId, items, offset = 0) {
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const existsStatement = getDb().prepare(
+    "SELECT 1 FROM listings WHERE user_id = ? AND external_id = ? LIMIT 1",
+  );
+  const seen = new Set();
+  let inserted = 0;
+  let skipped = 0;
 
   items.forEach((item, index) => {
+    const id = String(item.id || "").trim();
+    if (!id || seen.has(id) || existsStatement.get(userId, id)) {
+      skipped += 1;
+      return;
+    }
+    seen.add(id);
     statement.run(
       userId,
-      item.id,
+      id,
       item.title,
       item.price,
       item.address,
@@ -164,7 +208,10 @@ function insertListings(userId, items, offset = 0) {
       item.commuteHome,
       item.commuteWork,
       JSON.stringify(item.raw || {}),
-      offset + index,
+      offset + inserted,
     );
+    inserted += 1;
   });
+
+  return { inserted, skipped };
 }

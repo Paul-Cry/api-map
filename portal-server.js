@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -9,6 +10,9 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const PROBE_HOST = "127.0.0.1";
 const MAX_PORT_ATTEMPTS = 10;
+const WORKER_ADMIN_PASSWORD = process.env.WORKER_ADMIN_PASSWORD || "admin";
+const WORKER_ADMIN_SECRET = process.env.WORKER_ADMIN_SECRET || "local-worker-admin-secret";
+const WORKER_ADMIN_COOKIE = "worker_admin";
 
 const services = {
   feed: {
@@ -22,6 +26,9 @@ const services = {
     port: Number(process.env.FILTER_PORT || 5201),
     cwd: join(__dirname, "filter-site"),
     entry: "app.js",
+    extraEnv: () => ({
+      FEED_API_BASE: `http://127.0.0.1:${services.feed.port}`,
+    }),
   },
   worker: {
     name: "Worker API",
@@ -40,19 +47,34 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
   try {
+    if (!isPublicAuthRoute(url) && !isWorkerRoute(url) && !await isServiceAuthenticated(req, services.feed)) {
+      if (url.pathname.startsWith("/api/")) {
+        sendJson(res, 401, { ok: false, error: "Auth required" });
+        return;
+      }
+
+      const next = url.pathname === "/" ? "/analytics" : url.pathname + url.search;
+      sendRedirect(res, `/login?next=${encodeURIComponent(next)}`);
+      return;
+    }
+
+    if (url.pathname === "/worker-login") {
+      await handleWorkerLogin(req, res, url);
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/") {
-      sendHtml(res, dashboardPage());
+      sendRedirect(res, "/analytics");
       return;
     }
 
     if (url.pathname === "/feed") {
-      await proxy(req, res, services.feed, "/");
+      sendRedirect(res, "/analytics");
       return;
     }
 
     if (url.pathname.startsWith("/feed/")) {
-      await proxy(req, res, services.feed, url.pathname.slice("/feed".length) + url.search);
+      sendRedirect(res, "/analytics");
       return;
     }
 
@@ -101,18 +123,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/analytics-admin") {
-      await proxy(req, res, services.filter, "/analytics-admin" + url.search);
-      return;
-    }
-
     if (
       url.pathname === "/api/me" ||
       url.pathname === "/api/login" ||
       url.pathname === "/api/register" ||
       url.pathname === "/api/logout" ||
+      url.pathname === "/api/listings/meta" ||
       url.pathname === "/api/listings" ||
       url.pathname.startsWith("/api/listings/") ||
+      url.pathname === "/api/favorites" ||
       url.pathname === "/api/import"
     ) {
       await proxy(req, res, services.feed, url.pathname + url.search);
@@ -124,7 +143,11 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/filter-preview" || url.pathname === "/api/filter-run" || url.pathname === "/api/analytics-run") {
+    if (
+      url.pathname === "/api/filter-preview" ||
+      url.pathname === "/api/filter-run" ||
+      url.pathname === "/api/analytics-run"
+    ) {
       await proxy(req, res, services.filter, url.pathname + url.search);
       return;
     }
@@ -205,6 +228,7 @@ async function startService(service) {
       ...process.env,
       PORT: String(port),
       HOST: "127.0.0.1",
+      ...(service.extraEnv ? service.extraEnv() : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -299,12 +323,189 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
+function sendRedirect(res, location, status = 302) {
+  res.writeHead(status, {
+    "Location": location,
+    "Cache-Control": "no-store",
+  });
+  res.end();
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
   res.end(JSON.stringify(body));
+}
+
+async function handleWorkerLogin(req, res, url) {
+  const next = sanitizeWorkerNext(url.searchParams.get("next") || "/worker");
+
+  if ((req.method || "GET").toUpperCase() === "POST") {
+    const body = await readRequestBody(req);
+    const params = new URLSearchParams(body.toString("utf8"));
+    const password = params.get("password") || "";
+    if (password === WORKER_ADMIN_PASSWORD) {
+      res.writeHead(302, {
+        "Location": next,
+        "Set-Cookie": `${WORKER_ADMIN_COOKIE}=${workerAdminToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800`,
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return;
+    }
+
+    sendWorkerLoginPage(res, next, "Неверный пароль администратора.");
+    return;
+  }
+
+  sendWorkerLoginPage(res, next);
+}
+
+function sendWorkerLoginPage(res, next, error = "") {
+  sendHtml(res, `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход администратора</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      color: #f4f7ff;
+      background: linear-gradient(180deg, #080a10 0%, #111520 100%);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    .card {
+      width: min(440px, 100%);
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 16px;
+      background: #151a26;
+      box-shadow: 0 24px 60px rgba(0,0,0,.42);
+    }
+    h1 { margin: 0; font-size: 26px; line-height: 1.1; }
+    p { margin: 10px 0 18px; color: #aab6ca; line-height: 1.5; }
+    label { display: grid; gap: 8px; color: #d8dfeb; font-weight: 800; }
+    input {
+      width: 100%;
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 10px;
+      background: #0f1420;
+      color: #f4f7ff;
+      font: inherit;
+      outline: none;
+    }
+    input:focus { border-color: #7cc7a8; box-shadow: 0 0 0 3px rgba(124,199,168,.15); }
+    button {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 10px;
+      background: #7cc7a8;
+      color: #07120e;
+      font: inherit;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .error { margin-top: 12px; color: #ff8585; font-weight: 800; }
+    a { display: inline-flex; margin-top: 14px; color: #c9d7ff; text-decoration: none; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/worker-login?next=${escapeAttr(next)}">
+    <h1>Вход администратора</h1>
+    <p>Worker-панель доступна только администратору. Для обычного поиска квартир она не нужна.</p>
+    <label>Пароль администратора
+      <input name="password" type="password" autocomplete="current-password" autofocus>
+    </label>
+    <button type="submit">Открыть worker</button>
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
+    <a href="/analytics">Вернуться к аналитике</a>
+  </form>
+</body>
+</html>`);
+}
+
+function workerAdminToken() {
+  return createHmac("sha256", WORKER_ADMIN_SECRET).update("worker-admin").digest("hex");
+}
+
+function isWorkerAdmin(req) {
+  const cookieValue = parseCookies(req.headers.cookie || "")[WORKER_ADMIN_COOKIE] || "";
+  const expected = workerAdminToken();
+  if (cookieValue.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(cookieValue), Buffer.from(expected));
+}
+
+function parseCookies(cookieHeader) {
+  return Object.fromEntries(String(cookieHeader || "").split(";").map((part) => {
+    const index = part.indexOf("=");
+    if (index === -1) return ["", ""];
+    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+  }).filter(([key]) => key));
+}
+
+function isWorkerRoute(url) {
+  return (
+    url.pathname === "/worker" ||
+    url.pathname.startsWith("/worker/") ||
+    url.pathname === "/api/status" ||
+    url.pathname === "/api/run" ||
+    url.pathname.startsWith("/api/workers/") ||
+    url.pathname.startsWith("/api/jobs/") ||
+    url.pathname.startsWith("/api/batches/")
+  );
+}
+
+function sanitizeWorkerNext(next) {
+  return String(next || "").startsWith("/worker") ? next : "/worker";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
+async function isServiceAuthenticated(req, service) {
+  const headers = {};
+  if (req.headers.cookie) headers.cookie = req.headers.cookie;
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/me`, {
+    headers,
+    redirect: "manual",
+  });
+  if (!response.ok) return false;
+  const data = await response.json();
+  return Boolean(data.user);
+}
+
+function isPublicAuthRoute(url) {
+  return (
+    url.pathname === "/login" ||
+    url.pathname === "/register" ||
+    url.pathname === "/api/me" ||
+    url.pathname === "/api/login" ||
+    url.pathname === "/api/register" ||
+    url.pathname === "/api/logout"
+  );
 }
 
 async function buildPortalSummary() {
@@ -548,7 +749,7 @@ function dashboardPage() {
         </div>
         <div class="hero-actions">
           <button id="refreshBtn" class="button primary" type="button">Обновить статус</button>
-          <a class="button" href="/feed">Открыть ленту</a>
+          <a class="button" href="/analytics">Открыть аналитику</a>
         </div>
       </div>
     </section>
@@ -574,18 +775,6 @@ function dashboardPage() {
         </div>
       </div>
       <div class="route-grid">
-        <a class="card" href="/feed">
-          <span class="label">Лента</span>
-          <h3>Просмотр объявлений</h3>
-          <p>Карточки, цены, адреса, время в пути и экспорт данных.</p>
-          <div class="path">/feed</div>
-        </a>
-        <a class="card" href="/admin">
-          <span class="label">База</span>
-          <h3>Панель базы</h3>
-          <p>Загрузка JSON-файлов и хранение списка объявлений на сервере.</p>
-          <div class="path">/admin</div>
-        </a>
         <a class="card" href="/filter">
           <span class="label">Фильтр</span>
           <h3>Фильтрация и экспорт</h3>
@@ -615,12 +804,6 @@ function dashboardPage() {
           <h3>Арендная аналитика</h3>
           <p>Статистика по рынку, средние значения, медиана и входные метрики.</p>
           <div class="path">/analytics</div>
-        </a>
-        <a class="card" href="/analytics-admin">
-          <span class="label">Admin</span>
-          <h3>Панель аналитики</h3>
-          <p>Сохранение и загрузка аналитического JSON с ключом администратора.</p>
-          <div class="path">/analytics-admin</div>
         </a>
       </div>
     </section>

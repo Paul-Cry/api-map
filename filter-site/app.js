@@ -13,6 +13,8 @@ const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const IMAGE_FETCH_DELAY_MS = 5000;
 const ANALYTICS_DATA_FILE = new URL('./analytics-data.json', import.meta.url);
 const ADMIN_KEY_FILE = new URL('./.analytics-admin-key', import.meta.url);
+const FEED_API_BASE = String(globalThis.process?.env?.FEED_API_BASE || '').replace(/\/+$/, '');
+const ANALYTICS_PREVIEW_LIMIT = 12;
 
 function loadAdminKey() {
   const envKey = String(globalThis.process?.env?.ANALYTICS_ADMIN_KEY || globalThis.process?.env?.ADMIN_KEY || '').trim();
@@ -33,7 +35,7 @@ function loadAdminKey() {
 }
 
 const ADMIN_KEY = loadAdminKey();
-const preferredFilterTimeKeys = ['работа', 'работа 2'];
+const preferredFilterTimeKeys = ['работа', 'работа 2', 'commuteWork', 'commuteHome'];
 const ignoredFilterTimeKeyNames = new Set([
   'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
   'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
@@ -137,7 +139,7 @@ function canAutoDetectFilterTimeKey(key) {
   if (!normalized) return false;
   if (preferredFilterTimeKeys.includes(normalized)) return true;
   if (ignoredFilterTimeKeyNames.has(normalized.toLowerCase())) return false;
-  return /время|маршрут|дорог|путь|работ|родин|ол|никит|time|route/i.test(normalized);
+  return /время|маршрут|дорог|путь|работ|родин|ол|никит|commute|time|route/i.test(normalized);
 }
 
 function isCompactFilterTimeValue(value) {
@@ -284,7 +286,7 @@ function detectAnalyticsTimeKeys(items) {
       if (ignored.has(lower) || keys.includes(key)) return;
       const value = item[key];
       const text = String(value ?? '').toLowerCase();
-      const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|time|route/.test(lower);
+      const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|commute|time|route/.test(lower);
       const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
       if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
         if (typeof value === 'number' && !looksLikeRoute) return;
@@ -293,7 +295,7 @@ function detectAnalyticsTimeKeys(items) {
     });
   });
   return keys.sort((a, b) => {
-    const score = (key) => /оли|ol/i.test(key) ? -2 : /родина|никит|nik/i.test(key) ? -1 : 0;
+    const score = (key) => /commutework|оли|ol/i.test(key) ? -2 : /commutehome|родина|никит|nik/i.test(key) ? -1 : 0;
     return score(a) - score(b) || a.localeCompare(b, 'ru');
   });
 }
@@ -320,6 +322,12 @@ function chooseAnalyticsKey(preferredKey, timeKeys, matcher) {
   if (preferredKey && timeKeys.includes(preferredKey)) return preferredKey;
   const match = timeKeys.find((key) => matcher.test(key));
   return match || timeKeys[0] || '';
+}
+
+function chooseSecondAnalyticsKey(preferredKey, timeKeys, firstKey, matcher) {
+  if (preferredKey && preferredKey !== firstKey && timeKeys.includes(preferredKey)) return preferredKey;
+  const match = timeKeys.find((key) => key !== firstKey && matcher.test(key));
+  return match || timeKeys.find((key) => key !== firstKey) || '';
 }
 
 function getAnalyticsTitle(item) {
@@ -378,29 +386,18 @@ function areaCategory(area) {
 }
 
 function getRent(item) {
-  return Number(item?.rent_per_month) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
+  return Number(item?.rent_per_month) || Number(item?.monthly) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
 }
 
 function getMonths(item) {
-  const months = Number(item?.months);
-  if (Number.isFinite(months) && months > 0) return months;
-
-  const source = [item?.dop, item?.description].map((value) => String(value ?? '').toLowerCase()).join(' ');
-  if (/от\s+года|год(а|у)?/.test(source)) return 12;
-  if (/полгода|6\s*мес/.test(source)) return 6;
-  if (/2\s*года/.test(source)) return 24;
-
-  return 3;
+  return 1;
 }
 
 function getTotal(item, rent, months) {
-  const total = Number(item?.total_for_period);
-  if (Number.isFinite(total) && total > 0) return total;
   const commission = getCommission(item);
-  const deposit = getDeposit(item) || getDepositFromText(item, rent);
-  const partsTotal = rent * months + commission + deposit;
+  const partsTotal = rent + commission;
   if (Number.isFinite(partsTotal) && partsTotal > 0) return partsTotal;
-  return rent * months;
+  return rent;
 }
 
 function getPaymentSourceText(item) {
@@ -465,7 +462,7 @@ function balanceType(olya, nikita) {
   if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
   const diff = Math.abs(olya - nikita);
   if (diff === 0) return 'одинаково';
-  const side = olya < nikita ? 'Работа быстрее' : 'Работа 2 быстрее';
+  const side = olya < nikita ? 'первый адрес быстрее' : 'второй адрес быстрее';
   if (diff <= 15) return 'почти одинаково, ' + side;
   if (diff <= 30) return 'разница 16-30 мин, ' + side;
   if (diff <= 60) return 'разница 31-60 мин, ' + side;
@@ -516,12 +513,12 @@ function gradeLabel(score) {
 }
 
 function getPeriodLabel(rows) {
-  const months = [...new Set(rows.map((row) => row.months).filter(Boolean))];
-  if (months.length === 1) return 'за ' + months[0] + ' мес.';
-  return 'за период';
+  return 'за месяц';
 }
 
 function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) {
+  const routeKeys = [...new Set([olyaKey, nikitaKey].filter(Boolean))];
+  const hasTwoRoutes = routeKeys.length > 1;
   const baseRows = items.map((item, index) => {
     const rent = getRent(item);
     const months = getMonths(item);
@@ -530,10 +527,12 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     const rooms = parseRooms(item);
     const floorInfo = parseFloorInfo(item);
     const olya = parseTime(item[olyaKey]);
-    const nikita = parseTime(item[nikitaKey]);
-    const avgCommute = Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity;
-    const maxCommute = Math.max(olya, nikita);
-    const diffTime = Math.abs(olya - nikita);
+    const nikita = hasTwoRoutes ? parseTime(item[nikitaKey]) : Infinity;
+    const avgCommute = hasTwoRoutes
+      ? (Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity)
+      : olya;
+    const maxCommute = hasTwoRoutes ? Math.max(olya, nikita) : olya;
+    const diffTime = hasTwoRoutes ? Math.abs(olya - nikita) : Infinity;
     const commission = getCommission(item);
     const deposit = getDeposit(item) || getDepositFromText(item, rent);
     const startPayment = rent + commission + deposit;
@@ -619,51 +618,67 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const avgTimes = rows.map((row) => row.avgCommute);
   const diffTimes = rows.map((row) => row.diffTime);
   const rubPerMinute = rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
-  const fastBoth = rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
+  const fastBoth = hasTwoRoutes
+    ? rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit)
+    : rows.filter((row) => row.olya <= fastLimit);
   const midRange = rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
   const midRangeRentMedian = median(midRange.map((row) => row.rent));
   const midRangeTotalMedian = median(midRange.map((row) => row.total));
 
-  const metrics = [
-    ['Объектов', rows.length, 'с распознанной ценой'],
+  const metricsList = [
+    ['Квартир в подборке', rows.length, 'варианты с распознанной ценой'],
     ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
     ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
     ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
     ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
-    ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
     ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-    ['Среднее до работы', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
-    ['Среднее до работы 2', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
-    ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
-    ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
+    ['Среднее время в дороге', minutesText(Math.round(average(olyaTimes))), 'по всем квартирам с маршрутом'],
+  ];
+
+  if (hasTwoRoutes) {
+    metricsList.push(
+      ['Среднее до второго адреса', minutesText(Math.round(average(nikitaTimes))), 'по всем квартирам с маршрутом'],
+      ['Среднее для двух адресов', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
+      ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'насколько отличаются маршруты'],
+    );
+  }
+
+  metricsList.push(
     ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
     ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
-    ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+    [hasTwoRoutes ? 'Быстрые для двух адресов' : 'Быстрые по времени в дороге', fastBoth.length, hasTwoRoutes ? 'до ' + fastLimit + ' мин к каждому адресу' : 'до ' + fastLimit + ' мин до выбранного адреса'],
     ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
-    ['Медиана итого 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', сумма за ' + periodLabel],
-    ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
+    ['Медиана расходов 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', месячный итог'],
+    ['Медиана расходов за месяц', rub(median(totals)), 'аренда + комиссия, без залога'],
     ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
-  ].map(([label, value, note]) => ({ label, value, note }));
+  );
+
+  const metrics = metricsList.map(([label, value, note]) => ({ label, value, note }));
 
   const cheapest = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent)[0];
   const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
   const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
   const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
-  const insights = [
+  const insightList = [
     ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
     ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
-    ['Самый быстрый до работы', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
-    ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
-  ].map(([title, body]) => ({ title, body }));
+    ['Самый быстрый до адреса', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+  ];
+  if (hasTwoRoutes) {
+    insightList.push(['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных']);
+  } else {
+    insightList.push(['Лучший баланс цены и дороги', balanced ? minutesText(balanced.olya) + '<br>' + rub(balanced.rent) : 'нет данных']);
+  }
+  const insights = insightList.map(([title, body]) => ({ title, body }));
 
   const baseColumns = [
     { label: 'Объект' },
     { label: 'Аренда' },
     { label: 'Цена за м²' },
-    { label: 'Итого ' + periodLabel },
-    { label: 'До работы' },
-    { label: 'До работы 2' },
+    { label: 'Итого в месяц' },
+    { label: 'До адреса' },
   ];
+  if (hasTwoRoutes) baseColumns.push({ label: 'До второго адреса' });
 
   const cheap = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
   const expensiveRows = rows.slice().sort((a, b) => b.rent - a.rent);
@@ -676,17 +691,29 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const minute = rows.filter((row) => row.rubPerCommuteMin > 0).sort((a, b) => a.rubPerCommuteMin - b.rubPerCommuteMin || a.avgCommute - b.avgCommute);
 
   const tableRows = {
-    cheap,
-    expensive: expensiveRows,
-    olya,
-    nikita,
-    balanced: balancedRows,
-    score,
-    value,
-    start,
-    minute,
-    buckets: buildAnalyticsBuckets(rows),
-    categories: buildAnalyticsCategories(rows),
+    cheap: cheap.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    expensive: expensiveRows.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    olya: olya.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    nikita: nikita.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    balanced: balancedRows.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    score: score.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    value: value.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    start: start.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    minute: minute.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    buckets: buildAnalyticsBuckets(rows, hasTwoRoutes),
+    categories: buildAnalyticsCategories(rows, hasTwoRoutes),
+  };
+
+  const tableCounts = {
+    cheap: cheap.length,
+    expensive: expensiveRows.length,
+    olya: olya.length,
+    nikita: nikita.length,
+    balanced: balancedRows.length,
+    score: score.length,
+    value: value.length,
+    start: start.length,
+    minute: minute.length,
   };
 
   const tableColumns = {
@@ -724,28 +751,127 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     olyaKey,
     nikitaKey,
     fastLimit,
-    rows,
+    rows: rows.map(compactAnalyticsRow),
     metrics,
     insights,
     tableRows,
+    tableCounts,
     tableColumns,
     tableHighlights,
     periodLabel,
   };
 }
 
-function buildAnalyticsBuckets(rows) {
+function compactAnalyticsRow(row) {
+  const {
+    item,
+    index,
+    title,
+    address,
+    url,
+    rent,
+    total,
+    months,
+    area,
+    rooms,
+    floor,
+    totalFloors,
+    floorCategory,
+    areaCategory,
+    commission,
+    deposit,
+    startPayment,
+    overpaymentPercent,
+    moveInCostCategory,
+    priceM2,
+    dailyRent,
+    rubPerCommuteMin,
+    olya,
+    nikita,
+    avgCommute,
+    maxCommute,
+    diffTime,
+    balanceType,
+    rentScore,
+    priceM2Score,
+    commuteScore,
+    balanceScore,
+    areaScore,
+    startPaymentScore,
+    finalScore,
+    grade,
+  } = row;
+
+  return {
+    id: item?.id || item?.external_id || item?.externalId || item?.url || url || String(index),
+    index,
+    title,
+    address,
+    url,
+    rent,
+    total,
+    months,
+    area,
+    rooms,
+    floor,
+    totalFloors,
+    floorCategory,
+    areaCategory,
+    commission,
+    deposit,
+    startPayment,
+    overpaymentPercent,
+    moveInCostCategory,
+    priceM2,
+    dailyRent,
+    rubPerCommuteMin,
+    olya,
+    nikita,
+    avgCommute,
+    maxCommute,
+    diffTime,
+    balanceType,
+    rentScore,
+    priceM2Score,
+    commuteScore,
+    balanceScore,
+    areaScore,
+    startPaymentScore,
+    finalScore,
+    grade,
+    imageUrl: getAnalyticsImageUrl(item),
+  };
+}
+
+function getAnalyticsImageUrl(item) {
+  const directKeys = ['image', 'imageUrl', 'img', 'photo', 'photoUrl', 'preview', 'thumbnail', 'cover'];
+  for (const key of directKeys) {
+    const value = item?.[key] || item?.raw?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  const arrayKeys = ['images', 'imageUrls', 'photos', 'photoUrls', 'pictures'];
+  for (const key of arrayKeys) {
+    const values = item?.[key] || item?.raw?.[key];
+    if (Array.isArray(values)) {
+      const found = values.find((value) => typeof value === 'string' && value.trim());
+      if (found) return found.trim();
+    }
+  }
+
+  return '';
+}
+
+function buildAnalyticsBuckets(rows, hasTwoRoutes = true) {
   const groups = [
     ['до 60 мин', (row, key) => row[key] <= 60],
     ['60-90 мин', (row, key) => row[key] > 60 && row[key] <= 90],
     ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
     ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
   ];
-  const keys = [
-    ['Работа', 'olya'],
-    ['Работа 2', 'nikita'],
-    ['Оба маршрута', 'both'],
-  ];
+  const keys = hasTwoRoutes
+    ? [['Адрес', 'olya'], ['Второй адрес', 'nikita'], ['Оба маршрута', 'both']]
+    : [['Адрес', 'olya']];
   const result = [];
   groups.forEach((group) => {
     keys.forEach((key) => {
@@ -764,7 +890,7 @@ function buildAnalyticsBuckets(rows) {
   return result;
 }
 
-function buildAnalyticsCategories(rows) {
+function buildAnalyticsCategories(rows, hasTwoRoutes = true) {
   const categories = [];
   const addCategoryRows = (title, field) => {
     [...new Set(rows.map((row) => row[field]))].sort((a, b) => String(a).localeCompare(String(b), 'ru')).forEach((name) => {
@@ -780,7 +906,7 @@ function buildAnalyticsCategories(rows) {
       });
     });
   };
-  addCategoryRows('Баланс', 'balanceType');
+  if (hasTwoRoutes) addCategoryRows('Баланс', 'balanceType');
   addCategoryRows('Стартовый платёж', 'moveInCostCategory');
   return categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count);
 }
@@ -1038,6 +1164,10 @@ async function handleAnalyticsRun(req, res) {
   let items = Array.isArray(payload?.items) ? payload.items : [];
   let saved = null;
 
+  if (!items.length && payload?.source === 'listings') {
+    items = await readUserListingsFromFeed(req);
+  }
+
   if (!items.length && payload?.source === 'saved') {
     saved = await readSavedAnalyticsData();
     if (payload?.datasetId) {
@@ -1063,13 +1193,12 @@ async function handleAnalyticsRun(req, res) {
   const timeKeys = Array.isArray(payload?.timeKeys) && payload.timeKeys.length
     ? payload.timeKeys.filter(Boolean)
     : detectAnalyticsTimeKeys(items);
-  const olyaKey = chooseAnalyticsKey(payload?.olyaKey, timeKeys, /оли|ol/i);
-  const nikitaKey = chooseAnalyticsKey(payload?.nikitaKey, timeKeys, /родина|никит|nik/i);
+  const olyaKey = chooseAnalyticsKey(payload?.olyaKey, timeKeys, /commutework|оли|ol/i);
+  const nikitaKey = chooseSecondAnalyticsKey(payload?.nikitaKey, timeKeys, olyaKey, /commutehome|родина|никит|nik/i);
   const analytics = buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys });
 
   jsonResponse(res, 200, {
     ok: true,
-    items,
     timeKeys: analytics.timeKeys,
     selectedKeys: { olyaKey: analytics.olyaKey, nikitaKey: analytics.nikitaKey },
     fastLimit: analytics.fastLimit,
@@ -1084,6 +1213,30 @@ async function handleAnalyticsRun(req, res) {
     })) || [],
     ...analytics,
   });
+}
+
+async function readUserListingsFromFeed(req) {
+  if (!FEED_API_BASE) {
+    const error = new Error('FEED_API_BASE is not configured for listings analytics.');
+    error.status = 503;
+    throw error;
+  }
+
+  const response = await fetch(`${FEED_API_BASE}/api/listings`, {
+    headers: {
+      cookie: req.headers.cookie || '',
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data?.error || data?.message || 'Не удалось загрузить объявления из базы.');
+    error.status = response.status;
+    throw error;
+  }
+
+  return Array.isArray(data.items)
+    ? data.items.map((item) => ({ ...(item.raw && typeof item.raw === 'object' ? item.raw : {}), ...item }))
+    : [];
 }
 
 const page = String.raw`<!doctype html>
@@ -1578,7 +1731,7 @@ const page = String.raw`<!doctype html>
       <p>Загрузи JSON-файл, получи ленту карточек объявлений и отфильтруй их по времени в пути. Карточка показывает фото, название, цену, адрес, описание и ссылку на открытие объявления.</p>
       <div style="margin-top:12px;">
         <a class="button" href="/merge" style="display:inline-flex; text-decoration:none;">Объединить JSON</a>
-        <a class="button" href="/costs" style="display:inline-flex; text-decoration:none; margin-left:8px;">Расходы за 3 месяца</a>
+        <a class="button" href="/costs" style="display:inline-flex; text-decoration:none; margin-left:8px;">Расходы за месяц</a>
         <a class="button" href="/analytics" style="display:inline-flex; text-decoration:none; margin-left:8px;">Аналитика</a>
       </div>
     </section>
@@ -2536,6 +2689,7 @@ const analyticsPage = String.raw`<!doctype html>
       --radius: 14px;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       color: var(--text);
@@ -2566,8 +2720,25 @@ const analyticsPage = String.raw`<!doctype html>
     }
     .action-btn.primary { background: var(--accent); color: #07120e; border-color: var(--accent); }
     .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .toolbar { display: grid; grid-template-columns: 1fr 1fr 170px 170px auto auto; gap: 12px; align-items: end; padding: 14px; margin-bottom: 14px; }
+    .toolbar { display: grid; gap: 12px; align-items: end; padding: 14px; margin-bottom: 14px; }
+    .quick-links { display: flex; gap: 10px; flex-wrap: wrap; }
     .field { display: grid; gap: 6px; color: #d8dfeb; font-size: 13px; font-weight: 750; }
+    .search-guide {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .guide-card {
+      min-height: 96px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(26, 32, 46, 0.88), rgba(16, 21, 31, 0.88));
+      box-shadow: var(--shadow);
+    }
+    .guide-card b { display: block; color: #f4f7ff; font-size: 14px; line-height: 1.25; }
+    .guide-card span { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.45; }
     input, select, textarea {
       width: 100%; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
       background: #101520; color: var(--text); outline: none;
@@ -2577,6 +2748,50 @@ const analyticsPage = String.raw`<!doctype html>
     textarea { min-height: 150px; padding: 12px; resize: vertical; font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
     input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,199,168,0.15); }
     .json-box { margin-bottom: 14px; }
+    .empty-state {
+      margin-bottom: 14px;
+      padding: 28px;
+      border: 1px solid rgba(124, 199, 168, 0.16);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(26, 32, 46, 0.9), rgba(16, 21, 31, 0.9));
+      box-shadow: var(--shadow);
+    }
+    .empty-state h2 { margin: 0; font-size: 24px; line-height: 1.15; }
+    .empty-state p { max-width: 720px; }
+    .empty-state .action-btn { margin-top: 16px; text-decoration: none; }
+    .checking-state {
+      margin-bottom: 14px;
+      padding: 28px;
+      border: 1px solid rgba(137, 167, 255, 0.18);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(26, 32, 46, 0.92), rgba(16, 21, 31, 0.92));
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .checking-spinner {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 4px solid rgba(137, 167, 255, 0.18);
+      border-top-color: var(--accent);
+      animation: checking-spin 0.85s linear infinite;
+      flex: 0 0 auto;
+    }
+    .checking-state h2 { margin: 0; font-size: 24px; line-height: 1.15; }
+    .checking-state p { margin-top: 6px; max-width: 720px; }
+    .checking-note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    @keyframes checking-spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .checking-spinner { animation: none; border-top-color: rgba(124, 199, 168, 0.72); }
+    }
     .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
     .metric { min-height: 96px; padding: 13px; display: grid; align-content: space-between; }
     .metric span { color: var(--muted); font-size: 12px; font-weight: 750; }
@@ -2802,7 +3017,7 @@ const analyticsPage = String.raw`<!doctype html>
     .method { display: grid; gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
     .method strong { color: var(--text); }
     @media (max-width: 1120px) {
-      .toolbar, .grid { grid-template-columns: 1fr; }
+      .toolbar, .grid, .search-guide { grid-template-columns: 1fr; }
       .metrics, .insights { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 620px) {
@@ -2935,31 +3150,68 @@ const analyticsPage = String.raw`<!doctype html>
     <section class="hero">
       <div class="hero-top">
         <div>
-          <h1>Аналитика аренды</h1>
-          <p>Загрузи JSON с объявлениями и получи разбор рынка: средняя и медианная цена, дешёвые и дорогие варианты, полная стоимость въезда, время до работы и сбалансированные варианты.</p>
+          <h1>Подбор квартиры по времени в дороге</h1>
+          <p>Загрузите варианты аренды и сравните их по ежедневным маршрутам: сколько ехать до важных мест, сколько стоит въезд и какие квартиры дают лучший баланс цены и дороги.</p>
         </div>
-        <nav class="nav">
+        <nav class="nav" aria-label="Навигация аналитики">
           <a class="link-btn" href="/">Фильтр</a>
+          <a class="link-btn" href="/admin">Загрузить базу</a>
           <a class="link-btn" href="/costs">Расходы</a>
           <a class="link-btn" href="/merge">Объединить JSON</a>
-          <a class="link-btn" href="/analytics-admin">Панель</a>
+          <button class="link-btn" id="logoutBtn" type="button">Выйти</button>
         </nav>
       </div>
     </section>
 
-    <section class="toolbar">
-      <label class="field">JSON-файл <input id="fileInput" type="file" accept=".json,application/json"></label>
-      <label class="field">Сохранённый список <select id="savedListSelect"></select></label>
-      <label class="field">Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
-      <label class="field">Поле работы <select id="olyaKey"></select></label>
-      <label class="field">Поле работы 2 <select id="nikitaKey"></select></label>
-      <button id="loadSavedBtn" class="action-btn" type="button">Показать сохранённые списки</button>
-      <span id="savedListInfo" class="saved-list-info">API: 0 списков</span>
-      <button id="analyzeBtn" class="action-btn primary" type="button">Построить</button>
-      <button id="imageButton" class="action-btn" type="button">Фото объявлений</button>
+    <section class="toolbar" id="quickNav" hidden>
+      <input id="fileInput" type="file" accept=".json,application/json" hidden>
+      <button id="analyzeBtn" class="action-btn primary" type="button" hidden>Обновить</button>
+      <nav class="quick-links" aria-label="Быстрые переходы по аналитике">
+        <a class="link-btn" href="#cheapSection">Самые дешёвые</a>
+        <a class="link-btn" href="#fastSection">Самые быстрые</a>
+        <a class="link-btn" href="#balancedSection">Баланс цены и дороги</a>
+        <a class="link-btn" href="#favoritesPanel">Понравившиеся</a>
+      </nav>
+      <label class="field" hidden>Сохранённый список <select id="savedListSelect"></select></label>
+      <label class="field" hidden>Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
+      <label class="field" hidden>Поле адреса <select id="olyaKey"></select></label>
+      <label class="field" hidden>Поле второго адреса <select id="nikitaKey"></select></label>
+      <button id="loadSavedBtn" class="action-btn" type="button" hidden>Показать сохранённые списки</button>
+      <span id="savedListInfo" class="saved-list-info" hidden>API: 0 списков</span>
+      <button id="imageButton" class="action-btn" type="button" hidden>Фото объявлений</button>
     </section>
 
-    <section class="panel json-box">
+    <section class="checking-state" id="checkingState" aria-live="polite" hidden>
+      <div class="checking-spinner" aria-hidden="true"></div>
+      <div>
+        <h2>Проверяем ваши объявления</h2>
+        <p>Сверяемся с базой и ждём ответ API. Если объявления уже загружены, сразу построим аналитику.</p>
+        <p class="checking-note">Сейчас аккуратно достанем квартиры, посчитаем дороги и цены, а потом покажем, где жить приятно, а где утро начинается с квеста «доехать и не поседеть».</p>
+      </div>
+    </section>
+
+    <section class="empty-state" id="emptyState" hidden>
+      <h2>У вас пока нет объявлений</h2>
+      <p>Добавьте квартиры в свою базу, и здесь появится подбор по времени в дороге, месячным расходам, стоимости въезда и понравившимся вариантам.</p>
+      <a class="action-btn primary" href="/admin">Загрузить объявления</a>
+    </section>
+
+    <section class="search-guide" id="searchGuide" aria-label="Что помогает выбрать квартиру" hidden>
+      <article class="guide-card">
+        <b>Сначала дорога</b>
+        <span>Сравнивайте квартиры по времени до важного адреса, чтобы каждый день не терять лишние часы.</span>
+      </article>
+      <article class="guide-card">
+        <b>Потом реальные расходы</b>
+        <span>Смотрите аренду, комиссию и платёж на входе рядом с ценой, а не только красивую ставку в объявлении.</span>
+      </article>
+      <article class="guide-card">
+        <b>Сохраняйте короткий список</b>
+        <span>Отмечайте понравившиеся варианты и отдельно помечайте объявления, где время в пути нужно проверить.</span>
+      </article>
+    </section>
+
+    <section class="panel json-box" hidden>
       <div class="panel-head">
         <div class="panel-title">JSON вручную</div>
         <div class="panel-meta">
@@ -2968,7 +3220,7 @@ const analyticsPage = String.raw`<!doctype html>
         </div>
       </div>
       <div class="panel-body">
-        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"работа":"1 ч 43 мин","работа 2":"2 ч 17 мин"}]'></textarea>
+        <textarea id="jsonInput" placeholder='[{"title":"2-к. квартира","rent_per_month":45000,"адрес":"1 ч 43 мин","адрес 2":"2 ч 17 мин"}]'></textarea>
       </div>
     </section>
 
@@ -2986,9 +3238,9 @@ const analyticsPage = String.raw`<!doctype html>
       <div class="panel-body" id="fullTable"></div>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden" id="cheapSection">
       <section class="panel">
-        <div class="panel-head"><div class="panel-title">Самые дешёвые</div><div class="status">по стоимости за 3 месяца</div></div>
+        <div class="panel-head"><div class="panel-title">Самые дешёвые</div><div class="status">по месячному расходу без залога</div></div>
         <div class="panel-body" id="cheapTable"></div>
       </section>
       <section class="panel">
@@ -2997,18 +3249,18 @@ const analyticsPage = String.raw`<!doctype html>
       </section>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden" id="fastSection">
       <section class="panel">
-        <div class="panel-head"><div class="panel-title">Быстрее всего до работы</div><div id="olyaAvg" class="status"></div></div>
+        <div class="panel-head"><div class="panel-title" id="olyaTitle">Быстрее всего до адреса</div><div id="olyaAvg" class="status"></div></div>
         <div class="panel-body" id="olyaTable"></div>
       </section>
-      <section class="panel">
-        <div class="panel-head"><div class="panel-title">Быстрее всего до работы 2</div><div id="nikitaAvg" class="status"></div></div>
+      <section class="panel" id="nikitaPanel">
+        <div class="panel-head"><div class="panel-title" id="nikitaTitle">Быстрее всего до второго адреса</div><div id="nikitaAvg" class="status"></div></div>
         <div class="panel-body" id="nikitaTable"></div>
       </section>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden" id="balancedSection">
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Золотая середина</div><div id="balancedAvg" class="status"></div></div>
         <div class="panel-body" id="balancedTable"></div>
@@ -3019,7 +3271,7 @@ const analyticsPage = String.raw`<!doctype html>
       </section>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden">
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Оценка 0-100</div><div id="scoreAvg" class="status"></div></div>
         <div class="panel-body" id="scoreTable"></div>
@@ -3030,7 +3282,7 @@ const analyticsPage = String.raw`<!doctype html>
       </section>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden">
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Самый дешёвый вход</div><div id="startAvg" class="status"></div></div>
         <div class="panel-body" id="startTable"></div>
@@ -3041,19 +3293,19 @@ const analyticsPage = String.raw`<!doctype html>
       </section>
     </section>
 
-    <section class="grid analytics-section">
+    <section class="grid analytics-section hidden">
       <section class="panel">
         <div class="panel-head"><div class="panel-title">Типы баланса и входа</div><div class="status">сводка категорий</div></div>
         <div class="panel-body" id="categoryTable"></div>
       </section>
     </section>
 
-    <section class="panel analytics-section" id="favoritesPanel">
+    <section class="panel analytics-section hidden" id="favoritesPanel">
       <div class="panel-head">
         <div class="fav-panel-head">
           <div>
             <div class="panel-title">Понравившиеся</div>
-            <div id="favoritesStatus" class="status">Избранные варианты сохраняются в браузере</div>
+            <div id="favoritesStatus" class="status">Избранные варианты сохраняются в вашей базе</div>
           </div>
           <div class="fav-actions">
             <button id="downloadFavoritesBtn" class="small-btn" type="button">Скачать избранное JSON</button>
@@ -3067,7 +3319,7 @@ const analyticsPage = String.raw`<!doctype html>
       <div class="panel-body" id="favoriteTable"></div>
     </section>
 
-    <section class="panel analytics-section" id="commuteIssuesPanel">
+    <section class="panel analytics-section hidden" id="commuteIssuesPanel">
       <div class="panel-head">
         <div class="fav-panel-head">
           <div>
@@ -3083,7 +3335,7 @@ const analyticsPage = String.raw`<!doctype html>
       <div class="panel-body" id="commuteIssuesTable"></div>
     </section>
 
-    <section class="panel analytics-section">
+    <section class="panel analytics-section hidden">
       <div class="panel-head"><div class="panel-title">Что учитывается в анализе</div><div class="status">методика</div></div>
       <div class="panel-body method">
         <div><strong>Медиана</strong> показывает типичную цену устойчивее среднего, потому что дорогие выбросы сильно тянут среднее вверх.</div>
@@ -3108,6 +3360,11 @@ const analyticsPage = String.raw`<!doctype html>
       status: document.querySelector('#status'),
       imageButton: document.querySelector('#imageButton'),
       savedListInfo: document.querySelector('#savedListInfo'),
+      checkingState: document.querySelector('#checkingState'),
+      emptyState: document.querySelector('#emptyState'),
+      searchGuide: document.querySelector('#searchGuide'),
+      quickNav: document.querySelector('#quickNav'),
+      logoutBtn: document.querySelector('#logoutBtn'),
       metrics: document.querySelector('#metrics'),
       insights: document.querySelector('#insights'),
       cheapTable: document.querySelector('#cheapTable'),
@@ -3135,7 +3392,10 @@ const analyticsPage = String.raw`<!doctype html>
       commuteIssuesCount: document.querySelector('#commuteIssuesCount'),
       downloadCommuteIssuesBtn: document.querySelector('#downloadCommuteIssuesBtn'),
       olyaAvg: document.querySelector('#olyaAvg'),
+      olyaTitle: document.querySelector('#olyaTitle'),
+      nikitaPanel: document.querySelector('#nikitaPanel'),
       nikitaAvg: document.querySelector('#nikitaAvg'),
+      nikitaTitle: document.querySelector('#nikitaTitle'),
       balancedAvg: document.querySelector('#balancedAvg'),
       scoreAvg: document.querySelector('#scoreAvg'),
       valueAvg: document.querySelector('#valueAvg'),
@@ -3156,8 +3416,8 @@ const analyticsPage = String.raw`<!doctype html>
     const tableTitles = {
       cheap: 'Все самые дешёвые варианты',
       expensive: 'Все самые дорогие варианты',
-      olya: 'Все варианты по времени до работы',
-      nikita: 'Все варианты по времени до работы 2',
+      olya: 'Все варианты по времени до адреса',
+      nikita: 'Все варианты по времени до второго адреса',
       balanced: 'Все варианты золотой середины',
       score: 'Все варианты по среднему времени',
       value: 'Все варианты по цене за м²',
@@ -3177,6 +3437,9 @@ const analyticsPage = String.raw`<!doctype html>
       openTableKey: null,
       imageCache: new Map(),
       imageLoading: false,
+      isCheckingListings: false,
+      lastListingsSignature: '',
+      listingsRefreshTimer: null,
       favoriteKeys: loadStoredKeys(FAVORITES_STORAGE_KEY),
       viewedKeys: loadStoredKeys(VIEWED_STORAGE_KEY),
       commuteIssueKeys: loadStoredKeys(COMMUTE_ISSUES_STORAGE_KEY),
@@ -3314,6 +3577,10 @@ const analyticsPage = String.raw`<!doctype html>
       const item = row?.item || row;
       if (!item || typeof item !== 'object') return '';
       return String(
+        item.id ||
+        item.external_id ||
+        item.externalId ||
+        row?.id ||
         item.url ||
         item.URL ||
         item.link ||
@@ -3390,6 +3657,36 @@ const analyticsPage = String.raw`<!doctype html>
       saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
       saveStoredKeys(VIEWED_STORAGE_KEY, state.viewedKeys);
       saveStoredKeys(COMMUTE_ISSUES_STORAGE_KEY, state.commuteIssueKeys);
+    }
+
+    async function loadFavoriteKeysFromApi() {
+      try {
+        const response = await fetch('/api/favorites');
+        if (!response.ok) throw new Error('favorites api unavailable');
+        const data = await response.json();
+        state.favoriteKeys = uniqueStrings(Array.isArray(data.keys) ? data.keys : []);
+        saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+      } catch {
+        state.favoriteKeys = loadStoredKeys(FAVORITES_STORAGE_KEY);
+      }
+    }
+
+    async function syncFavoriteKeyToApi(key, shouldFavorite) {
+      try {
+        const response = await fetch('/api/favorites', {
+          method: shouldFavorite ? 'POST' : 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        if (!response.ok) throw new Error('favorites api unavailable');
+        const data = await response.json();
+        if (Array.isArray(data.keys)) {
+          state.favoriteKeys = uniqueStrings(data.keys);
+          saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+        }
+      } catch {
+        saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+      }
     }
 
     function buildAnalyticsProgressSnapshot() {
@@ -3485,17 +3782,21 @@ const analyticsPage = String.raw`<!doctype html>
       saveStoredKeys(VIEWED_STORAGE_KEY, state.viewedKeys);
     }
 
-    function toggleFavoriteRow(row) {
+    async function toggleFavoriteRow(row) {
       const key = getFavoriteKey(row);
       if (!key) return;
+      let shouldFavorite = false;
       if (state.favoriteKeys.includes(key)) {
         state.favoriteKeys = state.favoriteKeys.filter((value) => value !== key);
       } else {
         state.favoriteKeys = [...state.favoriteKeys, key];
+        shouldFavorite = true;
       }
       saveStoredKeys(FAVORITES_STORAGE_KEY, state.favoriteKeys);
+      await syncFavoriteKeyToApi(key, shouldFavorite);
       renderTables();
       renderBuckets();
+      renderFavorites();
       if (state.openTableKey) {
         const rows = state.tableRows[state.openTableKey] || [];
         const columns = buildAnalyticsColumns(state.openTableKey);
@@ -3576,22 +3877,19 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function getRent(item) {
-      return Number(item?.rent_per_month) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
+      return Number(item?.rent_per_month) || Number(item?.monthly) || parseMoney(item?.price) || parseMoney(item?.rent) || 0;
     }
 
     function getMonths(item) {
-      const months = Number(item?.months);
-      return Number.isFinite(months) && months > 0 ? months : 3;
+      return 1;
     }
 
     function getTotal(item, rent, months) {
-      const total = Number(item?.total_for_period);
-      if (Number.isFinite(total) && total > 0) return total;
-
-      const partsTotal = Number(item?.rent_for_period || 0) + Number(item?.commission || 0) + Number(item?.deposit || 0);
+      const commission = getCommission(item);
+      const partsTotal = rent + commission;
       if (Number.isFinite(partsTotal) && partsTotal > 0) return partsTotal;
 
-      return rent * months;
+      return rent;
     }
 
     function getCommission(item) {
@@ -3619,7 +3917,7 @@ const analyticsPage = String.raw`<!doctype html>
       if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
       const diff = Math.abs(olya - nikita);
       if (diff === 0) return 'одинаково';
-      const side = olya < nikita ? 'Работа быстрее' : 'Работа 2 быстрее';
+      const side = olya < nikita ? 'первый адрес быстрее' : 'второй адрес быстрее';
       if (diff <= 15) return 'почти одинаково, ' + side;
       if (diff <= 30) return 'разница 16-30 мин, ' + side;
       if (diff <= 60) return 'разница 31-60 мин, ' + side;
@@ -3627,9 +3925,7 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function getPeriodLabel(rows) {
-      const months = [...new Set(rows.map((row) => row.months).filter(Boolean))];
-      if (months.length === 1) return 'за ' + months[0] + ' мес.';
-      return 'за период';
+      return 'за месяц';
     }
 
     function detectTimeKeys(items) {
@@ -3646,7 +3942,7 @@ const analyticsPage = String.raw`<!doctype html>
           if (ignored.has(lower) || keys.includes(key)) return;
           const value = item[key];
           const text = String(value ?? '').toLowerCase();
-          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|time|route/.test(lower);
+          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|commute|time|route/.test(lower);
           const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
           if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
             if (typeof value === 'number' && !looksLikeRoute) return;
@@ -3655,7 +3951,7 @@ const analyticsPage = String.raw`<!doctype html>
         });
       });
       return keys.sort((a, b) => {
-        const score = (key) => /оли|ol/i.test(key) ? -2 : /родина|никит|nik/i.test(key) ? -1 : 0;
+        const score = (key) => /commutework|оли|ol/i.test(key) ? -2 : /commutehome|родина|никит|nik/i.test(key) ? -1 : 0;
         return score(a) - score(b) || a.localeCompare(b, 'ru');
       });
     }
@@ -3706,6 +4002,7 @@ const analyticsPage = String.raw`<!doctype html>
     function prepareRows() {
       const olyaKey = els.olyaKey.value;
       const nikitaKey = els.nikitaKey.value;
+      const hasTwoRoutes = Boolean(olyaKey && nikitaKey && olyaKey !== nikitaKey);
       const baseRows = state.items.map((item, index) => {
         const rent = getRent(item);
         const months = getMonths(item);
@@ -3714,10 +4011,12 @@ const analyticsPage = String.raw`<!doctype html>
         const rooms = parseRooms(item);
         const floorInfo = parseFloorInfo(item);
         const olya = parseTime(item[olyaKey]);
-        const nikita = parseTime(item[nikitaKey]);
-        const avgCommute = Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity;
-        const maxCommute = Math.max(olya, nikita);
-        const diffTime = Math.abs(olya - nikita);
+        const nikita = hasTwoRoutes ? parseTime(item[nikitaKey]) : Infinity;
+        const avgCommute = hasTwoRoutes
+          ? (Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity)
+          : olya;
+        const maxCommute = hasTwoRoutes ? Math.max(olya, nikita) : olya;
+        const diffTime = hasTwoRoutes ? Math.abs(olya - nikita) : Infinity;
         const commission = getCommission(item);
         const deposit = getDeposit(item);
         const startPayment = rent + commission + deposit;
@@ -3784,8 +4083,8 @@ const analyticsPage = String.raw`<!doctype html>
 
     function routeFieldLabel(key, fallbackIndex = 0) {
       const text = String(key || '').toLowerCase();
-      if (/родина|никит|nik/.test(text) || fallbackIndex === 1) return 'работа 2';
-      return 'работа';
+      if (/родина|никит|nik/.test(text) || fallbackIndex === 1) return 'адрес 2';
+      return 'адрес';
     }
 
     function displayItemsJson(items) {
@@ -3803,9 +4102,9 @@ const analyticsPage = String.raw`<!doctype html>
     function fillTimeSelects() {
       const options = state.timeKeys.map((key, index) => '<option value="' + esc(key) + '">' + esc(routeFieldLabel(key, index)) + '</option>').join('');
       els.olyaKey.innerHTML = options;
-      els.nikitaKey.innerHTML = options;
-      const olya = state.timeKeys.find((key) => /оли|ol/i.test(key)) || state.timeKeys[1] || state.timeKeys[0] || '';
-      const nikita = state.timeKeys.find((key) => /родина|никит|nik/i.test(key)) || state.timeKeys[0] || olya;
+      els.nikitaKey.innerHTML = '<option value="">Нет второго адреса</option>' + options;
+      const olya = state.timeKeys.find((key) => /commutework|оли|ol/i.test(key)) || state.timeKeys[0] || '';
+      const nikita = state.timeKeys.find((key) => key !== olya && /commutehome|родина|никит|nik/i.test(key)) || state.timeKeys.find((key) => key !== olya) || '';
       els.olyaKey.value = olya;
       els.nikitaKey.value = nikita;
     }
@@ -3821,31 +4120,42 @@ const analyticsPage = String.raw`<!doctype html>
       const diffTimes = state.rows.map((row) => row.diffTime);
       const rubPerMinute = state.rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
       const fastLimit = Number(els.fastLimit.value || 90);
-      const fastBoth = state.rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit);
       const periodLabel = getPeriodLabel(state.rows);
       const midRange = state.rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
       const midRangeRentMedian = median(midRange.map((row) => row.rent));
       const midRangeTotalMedian = median(midRange.map((row) => row.total));
+      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
+      const hasTwoRoutes = routeKeys.length > 1;
+      const fastBoth = hasTwoRoutes
+        ? state.rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit)
+        : state.rows.filter((row) => row.olya <= fastLimit);
       const values = [
-        ['Объектов', state.rows.length, 'с распознанной ценой'],
+        ['Квартир в подборке', state.rows.length, 'варианты с распознанной ценой'],
         ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
         ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
         ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
         ['Средняя цена за м²', m2.length ? rub(average(m2)) : 'нет данных', 'если площадь найдена в названии'],
-        ['Медиана цены за м²', m2.length ? rub(median(m2)) : 'нет данных', 'типичная цена за метр'],
         ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-        ['Среднее до работы', minutesText(Math.round(average(olyaTimes))), 'по всем объектам с временем'],
-        ['Среднее до работы 2', minutesText(Math.round(average(nikitaTimes))), 'по всем объектам с временем'],
-        ['Среднее для двоих', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
-        ['Средняя разница', minutesText(Math.round(average(diffTimes))), 'насколько маршруты отличаются'],
+        ['Среднее время в дороге', minutesText(Math.round(average(olyaTimes))), 'по всем квартирам с маршрутом'],
+      ];
+
+      if (hasTwoRoutes) {
+        values.push(
+          ['Среднее до второго адреса', minutesText(Math.round(average(nikitaTimes))), 'по всем квартирам с маршрутом'],
+          ['Среднее для двух адресов', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
+          ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'насколько отличаются маршруты'],
+        );
+      }
+
+      values.push(
         ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
         ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
-        ['Быстрые для обоих', fastBoth.length, 'до ' + fastLimit + ' мин каждому'],
+        [hasTwoRoutes ? 'Быстрые для двух адресов' : 'Быстрые по времени в дороге', fastBoth.length, hasTwoRoutes ? 'до ' + fastLimit + ' мин к каждому адресу' : 'до ' + fastLimit + ' мин до выбранного адреса'],
         ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
-        ['Медиана итого 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', сумма за ' + periodLabel],
-        ['Медиана итого ' + periodLabel, rub(median(totals)), 'аренда + комиссия + залог'],
+        ['Медиана расходов 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', месячный итог'],
+        ['Медиана расходов за месяц', rub(median(totals)), 'аренда + комиссия, без залога'],
         ['Порог дорогих вариантов', rub(percentile(rents, 0.9)), 'примерно 10% объявлений дороже'],
-      ];
+      );
       els.metrics.innerHTML = values.map((item) => '<article class="metric"><span>' + esc(item[0]) + '</span><strong>' + esc(item[1]) + '</strong><em>' + esc(item[2]) + '</em></article>').join('');
     }
 
@@ -3858,9 +4168,14 @@ const analyticsPage = String.raw`<!doctype html>
       const blocks = [
         ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
         ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
-        ['Самый быстрый до работы', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
-        ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных'],
       ];
+      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
+      const hasTwoRoutes = routeKeys.length > 1;
+      blocks.push(['Самый быстрый до адреса', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных']);
+      blocks.push(hasTwoRoutes
+        ? ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных']
+        : ['Лучший баланс цены и дороги', balanced ? minutesText(balanced.olya) + '<br>' + rub(balanced.rent) : 'нет данных']
+      );
       els.insights.innerHTML = blocks.map((block) => '<article class="insight"><b>' + esc(block[0]) + '</b><div>' + block[1] + '</div></article>').join('');
     }
 
@@ -3871,14 +4186,14 @@ const analyticsPage = String.raw`<!doctype html>
       const issueActive = favoriteKey && state.commuteIssueKeys.includes(favoriteKey);
       const summaryItems = [
         row.rent ? ['Аренда', rub(row.rent)] : null,
-        row.total ? ['За период', rub(row.total)] : null,
+        row.total ? ['Итого в месяц', rub(row.total)] : null,
         row.priceM2 ? ['₽ / м²', rub(row.priceM2)] : null,
         row.startPayment ? ['Старт', rub(row.startPayment)] : null,
         row.deposit ? ['Залог', rub(row.deposit)] : null,
         row.commission ? ['Комиссия', rub(row.commission)] : null,
         row.utilities ? ['ЖКУ', rub(row.utilities)] : null,
         (Number.isFinite(row.olya) || Number.isFinite(row.nikita))
-          ? ['Дорога', [Number.isFinite(row.olya) ? 'Работа ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Работа 2 ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
+          ? ['Дорога', [Number.isFinite(row.olya) ? 'Адрес ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Второй адрес ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
           : null,
       ].filter(Boolean);
       const title = row.url
@@ -3918,6 +4233,7 @@ const analyticsPage = String.raw`<!doctype html>
         return;
       }
       const visibleRows = options.limit ? rows.slice(0, options.limit) : rows;
+      const totalRows = Number.isFinite(options.totalRows) ? options.totalRows : rows.length;
       const tableClass = columns.some((col) => col.label === 'Объект') ? 'analytics-table listing-table' : 'analytics-table';
       target.innerHTML = '<table class="' + tableClass + '" data-table-key="' + esc(options.tableKey || '') + '"><thead><tr>' + columns.map((col) => '<th>' + esc(col.label) + '</th>').join('') + '</tr></thead><tbody>' +
         visibleRows.map((row, index) => {
@@ -3930,21 +4246,25 @@ const analyticsPage = String.raw`<!doctype html>
           }).join('') + '</tr>';
         }).join('') +
         '</tbody></table>' +
-        (options.tableKey && rows.length > visibleRows.length
-          ? '<div class="table-footer"><span>Показано ' + visibleRows.length + ' из ' + rows.length + '</span><button class="small-btn js-open-table" type="button" data-table="' + esc(options.tableKey) + '">Смотреть все</button></div>'
+        (options.tableKey && totalRows > visibleRows.length
+          ? '<div class="table-footer"><span>Показано ' + visibleRows.length + ' из ' + totalRows + '</span><button class="small-btn js-open-table" type="button" data-table="' + esc(options.tableKey) + '">Смотреть все</button></div>'
           : '');
     }
 
     function renderTables() {
       const periodLabel = getPeriodLabel(state.rows);
+      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
+      const hasTwoRoutes = routeKeys.length > 1;
       const baseColumns = [
         { label: 'Объект', render: listingCell },
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
-        { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
-        { label: 'До работы', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
-        { label: 'До работы 2', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+        { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
+        { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
       ];
+      if (hasTwoRoutes) {
+        baseColumns.push({ label: 'До второго адреса', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' });
+      }
       const cheap = state.rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
       const olya = state.rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
@@ -3978,14 +4298,15 @@ const analyticsPage = String.raw`<!doctype html>
       renderTable(els.cheapTable, cheap, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap' });
       renderTable(els.expensiveTable, expensive, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive' });
       renderTable(els.olyaTable, olya, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'olya' });
-      renderTable(els.nikitaTable, nikita, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
+      els.nikitaPanel.hidden = !hasTwoRoutes;
+      if (hasTwoRoutes) renderTable(els.nikitaTable, nikita, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
       renderTable(els.balancedTable, balanced, balancedColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced' });
       renderTable(els.scoreTable, score, scoreColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'score' });
       renderTable(els.valueTable, value, scoreColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'value' });
       renderTable(els.startTable, start, startColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'start' });
       renderTable(els.minuteTable, minute, minuteColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'minute' });
       els.olyaAvg.textContent = 'вариантов: ' + olya.length + ', средняя аренда: ' + rub(average(olya.map((row) => row.rent)));
-      els.nikitaAvg.textContent = 'вариантов: ' + nikita.length + ', средняя аренда: ' + rub(average(nikita.map((row) => row.rent)));
+      if (hasTwoRoutes) els.nikitaAvg.textContent = 'вариантов: ' + nikita.length + ', средняя аренда: ' + rub(average(nikita.map((row) => row.rent)));
       els.balancedAvg.textContent = 'средняя аренда: ' + rub(average(balanced.map((row) => row.rent)));
       els.scoreAvg.textContent = 'оценка: среднее из числовых показателей';
       els.valueAvg.textContent = 'вариантов с площадью: ' + value.length;
@@ -4000,11 +4321,11 @@ const analyticsPage = String.raw`<!doctype html>
         ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
         ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
       ];
-      const keys = [
-        ['Работа', 'olya'],
-        ['Работа 2', 'nikita'],
-        ['Оба маршрута', 'both'],
-      ];
+      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
+      const hasTwoRoutes = routeKeys.length > 1;
+      const keys = hasTwoRoutes
+        ? [['Адрес', 'olya'], ['Второй адрес', 'nikita'], ['Оба маршрута', 'both']]
+        : [['Адрес', 'olya']];
       const rows = [];
       groups.forEach((group) => {
         keys.forEach((key) => {
@@ -4037,7 +4358,7 @@ const analyticsPage = String.raw`<!doctype html>
           });
         });
       };
-      addCategoryRows('Баланс', 'balanceType');
+      if (hasTwoRoutes) addCategoryRows('Баланс', 'balanceType');
       addCategoryRows('Стартовый платёж', 'moveInCostCategory');
       renderTable(els.categoryTable, categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count), [
         { label: 'Тип', render: (row) => esc(row.type) },
@@ -4310,7 +4631,7 @@ const analyticsPage = String.raw`<!doctype html>
       renderTables();
       renderBuckets();
       openTableFromUrl();
-      setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: работа, работа 2.', 'ok');
+      setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени определены автоматически.', 'ok');
       setStage('Аналитика построена', 'ok');
       updateImageButtonState();
     }
@@ -4326,7 +4647,7 @@ const analyticsPage = String.raw`<!doctype html>
       renderAll();
     }
 
-    const ANALYZE_BUTTON_TEXT = 'Построить';
+    const ANALYZE_BUTTON_TEXT = 'Обновить из моей базы';
 
     function setAnalyzeBusy(isBusy) {
       els.analyzeBtn.disabled = isBusy;
@@ -4446,14 +4767,18 @@ const analyticsPage = String.raw`<!doctype html>
 
     function buildAnalyticsColumns(tableKey) {
       const periodLabel = state.analyticsView?.periodLabel || 'за период';
+      const selectedKeys = state.analyticsView?.selectedKeys || { olyaKey: els.olyaKey.value, nikitaKey: els.nikitaKey.value };
+      const hasTwoRoutes = [...new Set([selectedKeys.olyaKey, selectedKeys.nikitaKey].filter(Boolean))].length > 1;
       const baseColumns = [
         { label: 'Объект', render: listingCell },
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Цена за м²', render: (row) => row.priceM2 ? '<span class="money">' + rub(row.priceM2) + '</span>' : '<span class="muted">нет площади</span>' },
-        { label: 'Итого ' + periodLabel, render: (row) => '<span class="money">' + rub(row.total) + '</span>' + (periodLabel === 'за период' ? '<div class="muted">' + esc(row.months) + ' мес.</div>' : '') },
-        { label: 'До работы', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
-        { label: 'До работы 2', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' },
+        { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
+        { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
       ];
+      if (hasTwoRoutes) {
+        baseColumns.push({ label: 'До второго адреса', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' });
+      }
 
       const tableColumns = {
         cheap: baseColumns,
@@ -4470,6 +4795,20 @@ const analyticsPage = String.raw`<!doctype html>
       return tableColumns[tableKey] || baseColumns;
     }
 
+    function buildClientTableRows(tableKey) {
+      const rows = state.rows || [];
+      if (tableKey === 'cheap') return rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
+      if (tableKey === 'expensive') return rows.slice().sort((a, b) => b.rent - a.rent);
+      if (tableKey === 'olya') return rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
+      if (tableKey === 'nikita') return rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+      if (tableKey === 'balanced') return rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
+      if (tableKey === 'score') return rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
+      if (tableKey === 'value') return rows.filter((row) => row.priceM2 > 0).sort((a, b) => a.priceM2 - b.priceM2 || a.rent - b.rent);
+      if (tableKey === 'start') return rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
+      if (tableKey === 'minute') return rows.filter((row) => row.rubPerCommuteMin > 0).sort((a, b) => a.rubPerCommuteMin - b.rubPerCommuteMin || a.avgCommute - b.avgCommute);
+      return [];
+    }
+
     function applyAnalyticsView(data) {
       state.analyticsView = data;
       state.items = Array.isArray(data?.items) ? data.items : state.items;
@@ -4482,7 +4821,7 @@ const analyticsPage = String.raw`<!doctype html>
       if (Array.isArray(data?.timeKeys) && data.timeKeys.length) {
         fillTimeSelects();
         if (data.selectedKeys?.olyaKey) els.olyaKey.value = data.selectedKeys.olyaKey;
-        if (data.selectedKeys?.nikitaKey) els.nikitaKey.value = data.selectedKeys.nikitaKey;
+        els.nikitaKey.value = data.selectedKeys?.nikitaKey || '';
       }
 
       renderAll();
@@ -4527,18 +4866,49 @@ const analyticsPage = String.raw`<!doctype html>
 
     function renderTables() {
       if (!state.analyticsView) return;
-      const rows = state.tableRows;
+      const selectedKeys = state.analyticsView.selectedKeys || {};
+      const routeKeys = [...new Set([selectedKeys.olyaKey, selectedKeys.nikitaKey].filter(Boolean))];
+      const hasTwoRoutes = routeKeys.length > 1;
+      const rows = {
+        cheap: buildClientTableRows('cheap'),
+        expensive: buildClientTableRows('expensive'),
+        olya: buildClientTableRows('olya'),
+        nikita: buildClientTableRows('nikita'),
+        balanced: buildClientTableRows('balanced'),
+        score: buildClientTableRows('score'),
+        value: buildClientTableRows('value'),
+        start: buildClientTableRows('start'),
+        minute: buildClientTableRows('minute'),
+      };
+      state.tableRows = {
+        ...state.tableRows,
+        cheap: rows.cheap.slice(0, PREVIEW_LIMIT),
+        expensive: rows.expensive.slice(0, PREVIEW_LIMIT),
+        olya: rows.olya.slice(0, PREVIEW_LIMIT),
+        nikita: rows.nikita.slice(0, PREVIEW_LIMIT),
+        balanced: rows.balanced.slice(0, PREVIEW_LIMIT),
+        score: rows.score.slice(0, PREVIEW_LIMIT),
+        value: rows.value.slice(0, PREVIEW_LIMIT),
+        start: rows.start.slice(0, PREVIEW_LIMIT),
+        minute: rows.minute.slice(0, PREVIEW_LIMIT),
+      };
+      els.olyaTitle.textContent = hasTwoRoutes ? 'Быстрее всего до первого адреса' : 'Быстрее всего до адреса';
+      els.nikitaPanel.hidden = !hasTwoRoutes;
       renderTable(els.cheapTable, rows.cheap || [], buildAnalyticsColumns('cheap'), 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap', getRowClass });
       renderTable(els.expensiveTable, rows.expensive || [], buildAnalyticsColumns('expensive'), 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive', getRowClass });
       renderTable(els.olyaTable, rows.olya || [], buildAnalyticsColumns('olya'), 10, { limit: PREVIEW_LIMIT, tableKey: 'olya', getRowClass });
-      renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita', getRowClass });
+      if (hasTwoRoutes) {
+        renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita', getRowClass });
+      }
       renderTable(els.balancedTable, rows.balanced || [], buildAnalyticsColumns('balanced'), 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced', getRowClass });
       renderTable(els.scoreTable, rows.score || [], buildAnalyticsColumns('score'), 10, { limit: PREVIEW_LIMIT, tableKey: 'score', getRowClass });
       renderTable(els.valueTable, rows.value || [], buildAnalyticsColumns('value'), 10, { limit: PREVIEW_LIMIT, tableKey: 'value', getRowClass });
       renderTable(els.startTable, rows.start || [], buildAnalyticsColumns('start'), 10, { limit: PREVIEW_LIMIT, tableKey: 'start', getRowClass });
       renderTable(els.minuteTable, rows.minute || [], buildAnalyticsColumns('minute'), 10, { limit: PREVIEW_LIMIT, tableKey: 'minute', getRowClass });
       els.olyaAvg.textContent = 'вариантов: ' + (rows.olya || []).length + ', средняя аренда: ' + rub(average((rows.olya || []).map((row) => row.rent)));
-      els.nikitaAvg.textContent = 'вариантов: ' + (rows.nikita || []).length + ', средняя аренда: ' + rub(average((rows.nikita || []).map((row) => row.rent)));
+      if (hasTwoRoutes) {
+        els.nikitaAvg.textContent = 'вариантов: ' + (rows.nikita || []).length + ', средняя аренда: ' + rub(average((rows.nikita || []).map((row) => row.rent)));
+      }
       els.balancedAvg.textContent = 'средняя аренда: ' + rub(average((rows.balanced || []).map((row) => row.rent)));
       els.scoreAvg.textContent = 'оценка: среднее из серверных расчётов';
       els.valueAvg.textContent = 'вариантов с площадью: ' + (rows.value || []).length;
@@ -4568,7 +4938,49 @@ const analyticsPage = String.raw`<!doctype html>
       ]);
     }
 
+    function setEmptyStateVisible(isVisible) {
+      els.checkingState.hidden = true;
+      els.emptyState.hidden = !isVisible;
+      els.searchGuide.hidden = isVisible;
+      els.quickNav.hidden = isVisible;
+      els.metrics.hidden = isVisible;
+      els.insights.hidden = isVisible;
+      els.fullView.classList.add('hidden');
+      document.querySelectorAll('.analytics-section').forEach((section) => {
+        section.classList.toggle('hidden', isVisible);
+      });
+    }
+
+    function setCheckingStateVisible(isVisible) {
+      els.checkingState.hidden = !isVisible;
+      els.emptyState.hidden = true;
+      els.searchGuide.hidden = isVisible;
+      els.quickNav.hidden = isVisible;
+      els.metrics.hidden = isVisible;
+      els.insights.hidden = isVisible;
+      els.fullView.classList.add('hidden');
+      document.querySelectorAll('.analytics-section').forEach((section) => {
+        section.classList.toggle('hidden', isVisible);
+      });
+    }
+
     function renderAll() {
+      if (state.isCheckingListings) {
+        setCheckingStateVisible(true);
+        updateImageButtonState();
+        return;
+      }
+
+      if (!state.analyticsView || !state.rows.length) {
+        els.metrics.innerHTML = '';
+        els.insights.innerHTML = '';
+        setEmptyStateVisible(true);
+        setStatus('У вас пока нет объявлений в базе. Загрузите список квартир, чтобы построить аналитику.', 'warn');
+        setStage('Нет объявлений', 'warn');
+        updateImageButtonState();
+        return;
+      }
+      setEmptyStateVisible(false);
       renderMetrics();
       renderInsights();
       renderTables();
@@ -4577,12 +4989,12 @@ const analyticsPage = String.raw`<!doctype html>
       renderCommuteIssues();
       openTableFromUrl();
       if (state.analyticsView) {
-        setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени: работа, работа 2.', 'ok');
+        setStatus('Построена аналитика по ' + state.rows.length + ' объектам. Поля времени определены автоматически.', 'ok');
       }
     }
 
     function openFullTable(tableKey, options = {}) {
-      const rows = state.tableRows[tableKey] || [];
+      const rows = buildClientTableRows(tableKey);
       const columns = buildAnalyticsColumns(tableKey);
 
       if (!rows.length || !columns.length) {
@@ -4611,13 +5023,68 @@ const analyticsPage = String.raw`<!doctype html>
       }
     }
 
-    async function loadText(text) {
-      const parsed = unwrapJson(JSON.parse(text));
-      state.items = parsed;
-      els.jsonInput.value = text;
-      state.timeKeys = detectTimeKeys(parsed);
-      fillTimeSelects();
-      await loadAnalyticsView(parsed);
+    function normalizeApiListing(item) {
+      if (!item || typeof item !== 'object') return item;
+      return { ...(item.raw && typeof item.raw === 'object' ? item.raw : {}), ...item };
+    }
+
+    function buildListingsSignature(items, updatedAt) {
+      return JSON.stringify({
+        updatedAt: updatedAt || '',
+        count: items.length,
+        ids: items.map((item) => item?.id || item?.url || item?.link || item?.title || '').slice(0, 30),
+      });
+    }
+
+    function buildListingsMetaSignature(meta) {
+      return JSON.stringify({
+        updatedAt: meta?.updatedAt || '',
+        count: Number(meta?.count || 0),
+        sourceFile: meta?.sourceFile || '',
+      });
+    }
+
+    async function loadUserListings(options = {}) {
+      if (!options.silent) {
+        state.isCheckingListings = true;
+        setCheckingStateVisible(true);
+        setStage('Загружаю базу', 'info');
+        setStatus('Проверяем, есть ли объявления в вашей базе...', 'info');
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const response = await fetch('/api/listings/meta');
+      const data = await readJsonResponse(response, 'Не удалось загрузить объявления из базы.');
+      const listingCount = Number(data.count || 0);
+      const signature = buildListingsMetaSignature(data);
+      if (options.silent && signature === state.lastListingsSignature) return;
+      state.lastListingsSignature = signature;
+
+      await loadFavoriteKeysFromApi();
+
+      if (!listingCount) {
+        state.items = [];
+        state.rows = [];
+        state.analyticsView = null;
+        state.isCheckingListings = false;
+        renderAll();
+        return;
+      }
+
+      state.isCheckingListings = false;
+      setStage('Строю аналитику', 'info');
+      setStatus('Объявления найдены, строю аналитику...', 'info');
+      state.items = [];
+      await loadAnalyticsView([], { source: 'listings' });
+      const updatedText = data.updatedAt ? ' Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru-RU') + '.' : '';
+      setStatus('Загружено из вашей базы: ' + listingCount + ' объявлений.' + updatedText, 'ok');
+      setStage('Аналитика построена', 'ok');
+    }
+
+    function startListingsAutoRefresh() {
+      if (state.listingsRefreshTimer) clearInterval(state.listingsRefreshTimer);
+      state.listingsRefreshTimer = setInterval(() => {
+        void loadUserListings({ silent: true });
+      }, 15000);
     }
 
     async function loadSavedAnalyticsData() {
@@ -4655,25 +5122,25 @@ const analyticsPage = String.raw`<!doctype html>
     async function handleAnalyze() {
       setAnalyzeBusy(true);
       try {
-        if (!els.jsonInput.value.trim()) {
-          setStatus('Сначала загрузи файл или вставь JSON.', 'warn');
-          return;
-        }
         setStage('Показываю результаты', 'info');
-        setStatus('Идёт загрузка и обработка JSON, подожди немного...', 'info');
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        await loadText(els.jsonInput.value);
-        els.metrics.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        await loadUserListings();
+        if (state.rows.length) els.metrics.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (error) {
         state.items = [];
         state.rows = [];
         state.analyticsView = null;
+        state.isCheckingListings = false;
         renderAll();
-        setStatus('Ошибка JSON: ' + (error?.message || String(error)), 'warn');
+        setStatus('База объявлений не загружена: ' + (error?.message || String(error)), 'warn');
       } finally {
         setAnalyzeBusy(false);
       }
+    }
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/login?next=/analytics';
     }
 
     els.fileInput.addEventListener('change', handleFile);
@@ -4690,15 +5157,16 @@ const analyticsPage = String.raw`<!doctype html>
     els.importProgressBtn.addEventListener('click', () => els.progressImportInput.click());
     els.progressImportInput.addEventListener('change', () => { void handleProgressImport(); });
     els.downloadCommuteIssuesBtn.addEventListener('click', downloadCommuteIssuesJson);
-    els.fastLimit.addEventListener('input', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
-    els.olyaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
-    els.nikitaKey.addEventListener('change', () => { if (state.items.length) { void loadAnalyticsView(state.items); } });
+    els.logoutBtn.addEventListener('click', () => { void logout(); });
+    els.fastLimit.addEventListener('input', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
+    els.olyaKey.addEventListener('change', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
+    els.nikitaKey.addEventListener('change', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
     document.addEventListener('click', (event) => {
       const favoriteButton = event.target.closest('.js-fav-toggle');
       if (favoriteButton) {
         const key = decodeKey(favoriteButton.dataset.favoriteKey || '');
         const row = state.rows.find((item) => getFavoriteKey(item) === key);
-        if (row) toggleFavoriteRow(row);
+        if (row) void toggleFavoriteRow(row);
         return;
       }
 
@@ -4719,7 +5187,7 @@ const analyticsPage = String.raw`<!doctype html>
           renderTables();
           renderBuckets();
           if (state.openTableKey) {
-            const rows = state.tableRows[state.openTableKey] || [];
+            const rows = buildClientTableRows(state.openTableKey);
             const columns = buildAnalyticsColumns(state.openTableKey);
             renderTable(els.fullTable, rows, columns, state.tableHighlights[state.openTableKey] || 0, { getRowClass });
           }
@@ -4732,8 +5200,17 @@ const analyticsPage = String.raw`<!doctype html>
     });
     els.backToAnalytics.addEventListener('click', () => closeFullTable());
     window.addEventListener('popstate', () => openTableFromUrl());
-    renderAll();
-    loadSavedAnalyticsData();
+    loadUserListings().catch((error) => {
+      state.items = [];
+      state.rows = [];
+      state.analyticsView = null;
+      state.isCheckingListings = false;
+      renderAll();
+      setStatus('База объявлений не загружена: ' + (error?.message || String(error)), 'warn');
+      setStage('Ошибка загрузки базы', 'bad');
+    });
+    startListingsAutoRefresh();
+    window.addEventListener('focus', () => { void loadUserListings({ silent: true }); });
   </script>
 </body>
 </html>`;
@@ -4743,7 +5220,7 @@ const costsPage = String.raw`<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Расходы за 3 месяца</title>
+  <title>Расходы за месяц</title>
   <style>
     :root {
       color-scheme: dark;
@@ -4994,14 +5471,14 @@ const costsPage = String.raw`<!doctype html>
   <main class="app">
     <section class="hero">
       <div class="hero-top">
-        <h1>Расходы за 3 месяца</h1>
+        <h1>Расходы за месяц</h1>
         <div class="nav">
           <a class="link-btn" href="/">Фильтр</a>
           <a class="link-btn" href="/merge">Объединить JSON</a>
           <a class="link-btn" href="/analytics">Аналитика</a>
         </div>
       </div>
-      <p>Загрузи JSON с объявлениями: страница посчитает расходы за выбранное количество месяцев. По умолчанию итог включает аренду и комиссию, а залог показывается отдельно.</p>
+      <p>Загрузите JSON с объявлениями: страница посчитает месячный расход. В итог входит аренда, комиссия и примерные счётчики, если они оплачиваются отдельно. Залог показывается отдельно как нагрузка на входе, но не считается расходом. Калькулятор также смотрит на Kaltmiete, Warmmiete, Nebenkosten, Kaution, Provision, интернет и электричество в тексте объявления.</p>
     </section>
 
     <section class="toolbar">
@@ -5010,17 +5487,12 @@ const costsPage = String.raw`<!doctype html>
         <input id="fileInput" type="file" accept=".json,application/json">
       </label>
       <label class="field">
-        Месяцев
-        <input id="monthsInput" type="number" min="1" max="24" step="1" value="3">
+        Счётчики, интернет и электричество в месяц
+        <input id="metersInput" type="number" min="0" max="200000" step="500" value="0" placeholder="например 5000">
       </label>
-      <div class="cost-options" role="group" aria-label="Что учитывать в итоговой сумме">
-        <span>В итог включать</span>
-        <div class="check-list">
-          <label class="check-row"><input id="includeRent" type="checkbox" checked>Аренду</label>
-          <label class="check-row"><input id="includeCommission" type="checkbox" checked>Комиссию</label>
-          <label class="check-row"><input id="includeDeposit" type="checkbox">Залог</label>
-        </div>
-      </div>
+      <input id="includeRent" type="checkbox" checked hidden>
+      <input id="includeCommission" type="checkbox" checked hidden>
+      <input id="includeDeposit" type="checkbox" hidden>
       <label class="field">
         Сортировка
         <select id="sortMode">
@@ -5038,10 +5510,10 @@ const costsPage = String.raw`<!doctype html>
     </section>
 
     <section class="summary" aria-live="polite">
-      <div class="metric"><span>Объектов</span><strong id="countMetric">0</strong></div>
-      <div class="metric"><span>Минимум</span><strong id="minMetric">0 ₽</strong></div>
-      <div class="metric"><span>Медиана</span><strong id="medianMetric">0 ₽</strong></div>
-      <div class="metric"><span>Максимум</span><strong id="maxMetric">0 ₽</strong></div>
+      <div class="metric"><span>Квартир</span><strong id="countMetric">0</strong></div>
+      <div class="metric"><span>Минимум в месяц</span><strong id="minMetric">0 ₽</strong></div>
+      <div class="metric"><span>Медиана в месяц</span><strong id="medianMetric">0 ₽</strong></div>
+      <div class="metric"><span>Максимум в месяц</span><strong id="maxMetric">0 ₽</strong></div>
     </section>
 
     <section class="panel">
@@ -5058,7 +5530,7 @@ const costsPage = String.raw`<!doctype html>
   <script>
     const els = {
       fileInput: document.querySelector('#fileInput'),
-      monthsInput: document.querySelector('#monthsInput'),
+      metersInput: document.querySelector('#metersInput'),
       includeRent: document.querySelector('#includeRent'),
       includeCommission: document.querySelector('#includeCommission'),
       includeDeposit: document.querySelector('#includeDeposit'),
@@ -5163,6 +5635,19 @@ const costsPage = String.raw`<!doctype html>
       return { value: 0, found: false, inferred: false };
     }
 
+    function findUtilitiesInfo(item) {
+      const source = getPaymentSourceText(item).toLowerCase();
+      const included = /(?:жку|коммунал|сч[её]тчик|счетчик|интернет|электрич)[^.!?]{0,50}(?:включ|входит)|warmmiete/i.test(source);
+      const separate = /(?:сч[её]тчик|счетчик|электрич|интернет|nebenkosten|kaltmiete)[^.!?]{0,60}(?:отдель|не\s*включ|доп|плат)/i.test(source) || /kaltmiete/i.test(source);
+      if (included && !separate) {
+        return { mode: 'included', label: 'ЖКУ/счётчики указаны как включённые' };
+      }
+      if (separate) {
+        return { mode: 'separate', label: 'Счётчики или доп. расходы указаны отдельно' };
+      }
+      return { mode: 'unknown', label: 'Не указано, включены ли счётчики' };
+    }
+
     function getTitle(item) {
       return displayText(item?.title ?? item?.name ?? item?.название ?? 'Без названия');
     }
@@ -5187,7 +5672,7 @@ const costsPage = String.raw`<!doctype html>
       const includedParts = [
         includes.rent ? { label: 'аренда', value: parts.rentForPeriod } : null,
         includes.commission ? { label: 'комиссия', value: parts.commission } : null,
-        includes.deposit ? { label: 'залог', value: parts.depositValue } : null,
+        parts.utilities > 0 ? { label: 'счётчики', value: parts.utilities } : null,
       ].filter(Boolean);
       const total = includedParts.reduce((sum, part) => sum + part.value, 0);
       const formula = includedParts.length
@@ -5196,7 +5681,7 @@ const costsPage = String.raw`<!doctype html>
       const excludedLabels = [
         includes.rent ? null : 'аренда',
         includes.commission ? null : 'комиссия',
-        includes.deposit ? null : 'залог',
+        'залог',
       ].filter(Boolean);
       return {
         total,
@@ -5207,17 +5692,21 @@ const costsPage = String.raw`<!doctype html>
     }
 
     function calculateRow(item) {
-      const months = Math.max(1, Math.min(Number(els.monthsInput.value || 3), 24));
+      const months = 1;
       const includedCosts = getIncludedCosts();
       const rent = parsePrice(item);
       const rentForPeriod = rent * months;
       const commissionPercent = findCommissionPercent(item);
       const commission = commissionPercent === null ? 0 : rent * commissionPercent / 100;
       const deposit = findDeposit(item, rent);
+      const utilitiesInfo = findUtilitiesInfo(item);
+      const metersEstimate = Math.max(0, Number(els.metersInput.value || 0));
+      const utilities = utilitiesInfo.mode === 'included' ? 0 : metersEstimate;
       const totalParts = buildTotalParts({
         rentForPeriod,
         commission,
         depositValue: deposit.value,
+        utilities,
       }, includedCosts);
       const total = totalParts.total;
       const commissionText = commissionPercent === null ? 'не найдена' : commissionPercent + '%';
@@ -5238,6 +5727,9 @@ const costsPage = String.raw`<!doctype html>
         commission,
         deposit,
         depositValue: deposit.value,
+        utilities,
+        utilitiesInfo,
+        metersEstimate,
         commissionText,
         depositText,
         paymentSource: getPaymentSourceText(item),
@@ -5309,10 +5801,10 @@ const costsPage = String.raw`<!doctype html>
           '<thead><tr>',
             '<th>Объект</th>',
             '<th>Аренда в месяц</th>',
-            '<th>За период</th>',
+            '<th>Счётчики</th>',
             '<th>Комиссия</th>',
             '<th>Залог</th>',
-            '<th>Итого</th>',
+            '<th>Итого в месяц</th>',
             '<th>Разбор</th>',
           '</tr></thead>',
           '<tbody>',
@@ -5324,7 +5816,9 @@ const costsPage = String.raw`<!doctype html>
               const depositNote = row.depositText;
               const warnings = [
                 row.includedCosts.commission && row.commissionPercent === null ? '<span class="warn">Комиссия не найдена, считается 0 ₽</span>' : '',
-                row.includedCosts.deposit && !row.deposit.found ? '<span class="warn">Залог не найден, считается 0 ₽</span>' : '',
+                !row.deposit.found ? '<span class="warn">Залог не найден в объявлении</span>' : '',
+                row.utilitiesInfo.mode === 'unknown' ? '<span class="warn">Не указано, включены ли счётчики, интернет и электричество</span>' : '',
+                row.utilitiesInfo.mode === 'separate' && !row.metersEstimate ? '<span class="warn">Счётчики указаны отдельно, но примерная сумма не задана</span>' : '',
               ].filter(Boolean).join('');
               const formula = row.paymentFormula;
               const excluded = row.excludedCostLabels.length
@@ -5335,9 +5829,9 @@ const costsPage = String.raw`<!doctype html>
                 '<tr>',
                   '<td class="object">' + title + (row.address ? '<div class="address">' + esc(row.address) + '</div>' : '') + '</td>',
                   '<td class="money">' + rub(row.rent) + '</td>',
-                  '<td class="money">' + rub(row.rentForPeriod) + '</td>',
+                  '<td><div class="money">' + rub(row.utilities) + '</div><div class="address">' + esc(row.utilitiesInfo.label) + '</div></td>',
                   '<td><div class="money">' + rub(row.commission) + '</div><div class="address">' + esc(commissionText) + '</div></td>',
-                  '<td><div class="money">' + rub(row.deposit.value) + '</div><div class="address">' + esc(depositNote) + '</div></td>',
+                  '<td><div class="money">' + rub(row.deposit.value) + '</div><div class="address">' + esc(depositNote) + ', не входит в расход</div></td>',
                   '<td class="money total">' + rub(row.total) + '</td>',
                   '<td><div class="notes"><span>' + esc(formula) + '</span>' + excluded + warnings + '</div></td>',
                 '</tr>',
@@ -5378,11 +5872,13 @@ const costsPage = String.raw`<!doctype html>
         ...row.item,
         months: row.months,
         rent_per_month: Math.round(row.rent),
-        rent_for_period: Math.round(row.rentForPeriod),
         commission_percent: row.commissionPercent,
         commission: Math.round(row.commission),
         deposit: Math.round(row.deposit.value),
-        total_for_period: Math.round(row.total),
+        utilities_estimate: Math.round(row.utilities),
+        utilities_status: row.utilitiesInfo.label,
+        monthly_total: Math.round(row.total),
+        deposit_not_included: true,
         total_includes: row.includedCostLabels,
         total_excludes: row.excludedCostLabels,
         rent_per_month_raw: Math.round(row.rentPerMonth),
@@ -5401,10 +5897,9 @@ const costsPage = String.raw`<!doctype html>
     }
 
     els.fileInput.addEventListener('change', handleFile);
-    els.monthsInput.addEventListener('input', recalculate);
+    els.metersInput.addEventListener('input', recalculate);
     els.includeRent.addEventListener('change', recalculate);
     els.includeCommission.addEventListener('change', recalculate);
-    els.includeDeposit.addEventListener('change', recalculate);
     els.sortMode.addEventListener('change', renderRows);
     els.searchInput.addEventListener('input', renderRows);
     els.downloadBtn.addEventListener('click', downloadRows);
@@ -5600,7 +6095,7 @@ const mergePage = String.raw`<!doctype html>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <a class="back-link" href="/">На главный сайт</a>
-          <a class="back-link" href="/costs">Расходы за 3 месяца</a>
+          <a class="back-link" href="/costs">Расходы за месяц</a>
           <a class="back-link" href="/analytics">Аналитика</a>
         </div>
       </div>
@@ -6034,11 +6529,6 @@ function createServer() {
 
       if (req.method === 'GET' && url.pathname === '/analytics') {
         htmlResponse(res, analyticsPage);
-        return;
-      }
-
-      if (req.method === 'GET' && url.pathname === '/analytics-admin') {
-        htmlResponse(res, analyticsAdminPage);
         return;
       }
 

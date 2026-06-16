@@ -6,39 +6,53 @@
   <title>Вход</title>
   <style>
     :root{
-      --bg:#f4f6f8;
-      --panel:#fff;
-      --text:#17202a;
-      --muted:#64748b;
-      --line:#dce4ee;
-      --accent:#0f6fde;
-      --red:#b42318;
-      --shadow:0 10px 24px rgba(26,39,58,.07);
+      --bg:#111318;
+      --panel:#1b1f27;
+      --panel-strong:#202632;
+      --text:#f3f6fb;
+      --muted:#a9b3c3;
+      --line:#343c4b;
+      --accent:#35c2a4;
+      --accent-dark:#16977c;
+      --amber:#e7b65d;
+      --red:#ff8178;
+      --shadow:0 18px 42px rgba(0,0,0,.32);
     }
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45}
-    header{background:#fff;border-bottom:1px solid var(--line)}
-    .head{max-width:980px;margin:0 auto;padding:18px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}
+    body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5}
+    header{background:#171a21;border-bottom:1px solid var(--line)}
+    .head{max-width:1040px;margin:0 auto;padding:18px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}
     h1{margin:0;font-size:26px;letter-spacing:0}
     .back{color:var(--accent);font-weight:850;text-decoration:none}
-    main{max-width:980px;margin:0 auto;padding:28px 24px 40px}
-    .shell{display:grid;grid-template-columns:.9fr 1.1fr;gap:18px;align-items:start}
-    .intro,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:22px}
-    .intro h2,.panel h2{font-size:22px;margin:0 0 8px}
-    .intro p{margin:0;color:var(--muted)}
-    form{display:grid;gap:12px;margin-top:16px}
-    label{display:grid;gap:6px;font-weight:850}
-    input{height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;color:var(--text);background:#fff}
-    button,.switchLink{display:inline-flex;align-items:center;justify-content:center;min-height:42px;border-radius:8px;border:1px solid var(--line);padding:0 14px;font-weight:850;text-decoration:none;cursor:pointer}
-    button{background:var(--accent);border-color:var(--accent);color:#fff}
-    .switchLink{background:#fff;color:var(--text)}
-    .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+    main{max-width:1040px;margin:0 auto;padding:32px 24px 44px}
+    .shell{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch}
+    .intro,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:24px}
+    .intro{display:grid;align-content:space-between;min-height:420px;background:linear-gradient(135deg,#1b1f27 0%,#202632 58%,#262219 100%)}
+    .eyebrow{display:inline-flex;width:max-content;align-items:center;min-height:28px;padding:0 10px;border:1px solid rgba(231,182,93,.36);border-radius:999px;color:var(--amber);font-weight:850;font-size:12px;text-transform:uppercase}
+    .intro h2,.panel h2{font-size:28px;line-height:1.15;margin:18px 0 10px;letter-spacing:0}
+    .intro p,.hint{margin:0;color:var(--muted)}
+    .points{display:grid;gap:10px;margin-top:26px}
+    .point{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);border-radius:8px;padding:12px}
+    .point b{display:block;color:var(--text);margin-bottom:3px}
+    .point span{color:var(--muted)}
+    form{display:grid;gap:12px;margin-top:18px}
+    label{display:grid;gap:7px;font-weight:850}
+    input{height:44px;border:1px solid var(--line);border-radius:8px;padding:0 12px;color:var(--text);background:#131720;outline:none}
+    input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(53,194,164,.16)}
+    button,.switchLink{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:8px;border:1px solid var(--line);padding:0 14px;font-weight:850;text-decoration:none;cursor:pointer}
+    button{background:var(--accent);border-color:var(--accent);color:#06130f}
+    button:hover{background:var(--accent-dark);border-color:var(--accent-dark);color:#fff}
+    button:disabled{opacity:.6;cursor:wait}
+    .switchLink{background:#151922;color:var(--text)}
+    .switchLink:hover{border-color:var(--accent);color:var(--accent)}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
     .error{color:var(--red);font-weight:850;margin-top:10px}
-    @media(max-width:760px){
+    @media(max-width:820px){
       .head{display:block;padding:18px 14px}
       .back{display:inline-block;margin-top:10px}
       main{padding:14px 10px 30px}
       .shell{grid-template-columns:1fr}
+      .intro{min-height:0}
       .actions{grid-template-columns:1fr}
     }
   </style>
@@ -54,12 +68,30 @@
   <main>
     <div class="shell">
       <section class="intro">
-        <h2 id="introTitle">Ваш список квартир</h2>
-        <p id="introText">Войдите, чтобы открыть сохраненные объекты, загрузить новый JSON-массив и управлять только своими объявлениями.</p>
+        <div>
+          <span class="eyebrow">Поиск по времени в дороге</span>
+          <h2 id="introTitle">Найдите квартиру, откуда удобно ездить каждый день</h2>
+          <p id="introText">Сравнивайте варианты аренды по дороге до работы, дома, учебы или других важных мест, а не только по цене и адресу.</p>
+        </div>
+        <div class="points">
+          <div class="point">
+            <b>Время в пути видно сразу</b>
+            <span>Смотрите, сколько займет дорога от каждой квартиры до нужных точек.</span>
+          </div>
+          <div class="point">
+            <b>Цена и дорога рядом</b>
+            <span>Сравнивайте аренду, залог, комиссию и ежедневный маршрут в одной таблице.</span>
+          </div>
+          <div class="point">
+            <b>Личный короткий список</b>
+            <span>Оставляйте только те варианты, которые подходят по бюджету и не съедают день дорогой.</span>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
-        <h2 id="formTitle">Вход</h2>
+        <h2 id="formTitle">Войти в аккаунт</h2>
+        <p class="hint" id="formHint">Продолжите подбор квартиры по времени в дороге.</p>
         <form id="authForm">
           <label>
             Email
@@ -82,11 +114,12 @@
   <script>
     const mode = location.pathname === "/register" ? "register" : "login";
     const params = new URLSearchParams(location.search);
-    const next = params.get("next") || "/";
+    const next = params.get("next") || "/analytics";
     const pageTitle = document.querySelector("#pageTitle");
     const introTitle = document.querySelector("#introTitle");
     const introText = document.querySelector("#introText");
     const formTitle = document.querySelector("#formTitle");
+    const formHint = document.querySelector("#formHint");
     const submitBtn = document.querySelector("#submitBtn");
     const switchLink = document.querySelector("#switchLink");
     const form = document.querySelector("#authForm");
@@ -123,13 +156,15 @@
       document.title = isRegister ? "Регистрация" : "Вход";
       pageTitle.textContent = isRegister ? "Регистрация" : "Вход";
       formTitle.textContent = isRegister ? "Создать аккаунт" : "Войти в аккаунт";
+      formHint.textContent = isRegister ? "Создайте личный список квартир и сравнивайте их по маршрутам." : "Продолжите подбор квартиры по времени в дороге.";
+      password.autocomplete = isRegister ? "new-password" : "current-password";
       submitBtn.textContent = isRegister ? "Зарегистрироваться" : "Войти";
       switchLink.textContent = isRegister ? "Уже есть аккаунт" : "Регистрация";
       switchLink.href = isRegister ? `/login?next=${encodeURIComponent(next)}` : `/register?next=${encodeURIComponent(next)}`;
-      introTitle.textContent = isRegister ? "Создайте личное пространство" : "Ваш список квартир";
+      introTitle.textContent = isRegister ? "Ищите аренду вокруг ваших маршрутов" : "Найдите квартиру, откуда удобно ездить каждый день";
       introText.textContent = isRegister
-        ? "После регистрации вы сможете загружать свои массивы объектов, удалять лишние объявления и видеть только свои данные."
-        : "Войдите, чтобы открыть сохраненные объекты, загрузить новый JSON-массив и управлять только своими объявлениями.";
+        ? "Создайте аккаунт, чтобы сохранять варианты, сравнивать время до важных мест и быстрее отсеивать квартиры с неудобной дорогой."
+        : "Сравнивайте варианты аренды по дороге до работы, дома, учебы или других важных мест, а не только по цене и адресу.";
     }
 
     function safeNext(value) {

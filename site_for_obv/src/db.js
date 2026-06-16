@@ -57,8 +57,27 @@ export async function initializeDatabase() {
       position INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS favorite_listings (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      listing_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, listing_key)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_listings_user_id ON listings(user_id, position);
+    CREATE INDEX IF NOT EXISTS idx_favorite_listings_user_id ON favorite_listings(user_id, created_at);
+  `);
+  db.exec(`
+    DELETE FROM listings
+    WHERE row_id NOT IN (
+      SELECT MIN(row_id)
+      FROM listings
+      GROUP BY user_id, external_id
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_user_external_id
+      ON listings(user_id, external_id);
   `);
 }
 

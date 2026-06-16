@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { HOST, PORT, ROOT_DIR } from "./src/config.js";
 import { initializeDatabase } from "./src/db.js";
-import { sendFile, sendJson, sendText } from "./src/http.js";
+import { sendFile, sendJson, sendRedirect, sendText } from "./src/http.js";
+import { getCurrentUser } from "./src/middleware/auth.js";
 import { handleApiRoutes } from "./src/routes/apiRouter.js";
 
 const pages = new Map([
@@ -24,6 +25,16 @@ const server = createServer(async (req, res) => {
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && pages.has(url.pathname)) {
+      const user = getCurrentUser(req);
+      const isAuthPage = url.pathname === "/login" || url.pathname === "/register";
+      if (!user && !isAuthPage) {
+        sendRedirect(res, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+        return;
+      }
+      if (user && isAuthPage) {
+        sendRedirect(res, safeNext(url.searchParams.get("next") || "/"));
+        return;
+      }
       await sendFile(res, pages.get(url.pathname), "text/html; charset=utf-8", req.method === "HEAD");
       return;
     }
@@ -38,3 +49,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Listings site is running at http://${HOST}:${PORT}`);
 });
+
+function safeNext(value) {
+  return value.startsWith("/") && !value.startsWith("//") ? value : "/";
+}

@@ -28,6 +28,14 @@ export function sendText(res, status, text) {
   res.end(text);
 }
 
+export function sendRedirect(res, location, status = 302) {
+  res.writeHead(status, {
+    "Location": location,
+    "Cache-Control": "no-store",
+  });
+  res.end();
+}
+
 export async function readJsonPayload(req) {
   const body = await readBody(req);
   try {

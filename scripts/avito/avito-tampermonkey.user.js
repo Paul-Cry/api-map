@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Avito Listing Collector
 // @namespace    local.codex.avito
-// @version      1.1.0
+// @version      1.2.0
 // @description  Avito diagnostics and collector.
 // @match        https://www.avito.ru/*
 // @grant        GM_registerMenuCommand
@@ -84,6 +84,97 @@
 
     const base = streetHouseText || lines[0] || '';
     return [cityLine, base].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function normalizeListingUrl(url) {
+    if (!url) return null;
+
+    try {
+      const parsed = new URL(url, location.origin);
+      parsed.hash = '';
+      parsed.search = '';
+      return parsed.href;
+    } catch {
+      return String(url).split('#')[0].split('?')[0] || null;
+    }
+  }
+
+  function extractListingIdFromUrl(url) {
+    const cleanUrl = normalizeListingUrl(url);
+    if (!cleanUrl) return null;
+
+    try {
+      const { pathname } = new URL(cleanUrl, location.origin);
+      const match = pathname.match(/_(\d{6,})(?:\/)?$/) || pathname.match(/\/(\d{6,})(?:\/)?$/);
+      return match?.[1] || null;
+    } catch {
+      const match = cleanUrl.match(/_(\d{6,})(?:\/)?(?:$|[?#])/);
+      return match?.[1] || null;
+    }
+  }
+
+  function extractListingId(card, url) {
+    const attributeSources = [
+      card,
+      card?.querySelector('[data-item-id], [data-id], [id]'),
+      card?.querySelector('[data-marker="item-title"], [data-marker="item-photo-sliderLink"]'),
+    ];
+
+    for (const node of attributeSources) {
+      const id =
+        node?.getAttribute?.('data-item-id') ||
+        node?.getAttribute?.('data-id') ||
+        node?.id;
+
+      if (/^\d{6,}$/.test(String(id || ''))) {
+        return String(id);
+      }
+    }
+
+    return extractListingIdFromUrl(url);
+  }
+
+  function hashString(value) {
+    let hash = 2166136261;
+    const text = String(value || '');
+
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+
+    return (hash >>> 0).toString(36);
+  }
+
+  function createFallbackListingId(item) {
+    const source = [
+      normalizeListingUrl(item.url),
+      item.title,
+      item.price,
+      item.adress,
+      item.dop,
+    ].filter(Boolean).join('|');
+
+    return source ? `fallback_${hashString(source)}` : null;
+  }
+
+  function ensureListingId(item) {
+    if (!item || typeof item !== 'object') return null;
+    if (item.id) return item.id;
+
+    item.id = extractListingIdFromUrl(item.url) || createFallbackListingId(item);
+    return item.id;
+  }
+
+  function getListingDedupKeys(item) {
+    const id = ensureListingId(item);
+    const fallbackKey = [item?.title, item?.price, item?.adress].filter(Boolean).join('|');
+    return Array.from(new Set([
+      id,
+      extractListingIdFromUrl(item?.url),
+      normalizeListingUrl(item?.url),
+      fallbackKey || null,
+    ].filter(Boolean)));
   }
 
   function getJsonValue(key, fallback) {
@@ -259,6 +350,8 @@
       'img[src], img[data-src], img[data-url], img[data-img-src], picture source[srcset], source[srcset]'
     );
     const linkNode = card.querySelector('a[href]');
+    const url = linkNode?.href || null;
+    const id = extractListingId(card, url);
     const imageUrl =
       imageNode?.getAttribute('data-src') ||
       imageNode?.getAttribute('data-url') ||
@@ -267,15 +360,18 @@
       imageNode?.getAttribute('srcset')?.split(',')?.[0]?.trim()?.split(' ')?.[0] ||
       null;
 
-    return {
+    const item = {
+      id,
       title: normalizeText(titleNode?.textContent),
       price: normalizeText(priceNode?.textContent),
       adress: extractAddressText(addressNode),
       dop: normalizeText(paramsNode?.textContent),
       description: normalizeText(descriptionNode?.textContent),
       image: imageUrl,
-      url: linkNode?.href || null,
+      url,
     };
+    ensureListingId(item);
+    return item;
   }
 
   async function collectVisibleListings() {
@@ -433,14 +529,21 @@
       }
 
       const existing = getItems();
-      const seen = new Set(existing.map((item) => item.url || `${item.title}|${item.price}|${item.adress}`));
+      const seen = new Set();
+      for (const item of existing) {
+        for (const key of getListingDedupKeys(item)) {
+          seen.add(key);
+        }
+      }
       let added = 0;
 
       for (const item of items) {
-        const key = item.url || `${item.title}|${item.price}|${item.adress}`;
-        if (!seen.has(key)) {
+        const keys = getListingDedupKeys(item);
+        if (!keys.some((key) => seen.has(key))) {
           existing.push(item);
-          seen.add(key);
+          for (const key of keys) {
+            seen.add(key);
+          }
           added += 1;
         }
       }

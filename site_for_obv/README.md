@@ -14,8 +14,7 @@ npm start
 
 После этого сайт объявлений доступен через общий сервер:
 
-- `http://localhost:3000/feed`
-- `http://localhost:3000/admin`
+- `http://localhost:3000/analytics`
 - `http://localhost:3000/login`
 - `http://localhost:3000/register`
 
@@ -28,7 +27,7 @@ npm start
 После запуска:
 
 - главная страница: `http://localhost:3000`
-- панель управления: `http://localhost:3000/admin`
+- аналитика подбора: `http://localhost:3000/analytics`
 
 Нужен Node.js 24 или новее, потому что используется встроенный модуль `node:sqlite`.
 
