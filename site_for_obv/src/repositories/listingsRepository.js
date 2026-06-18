@@ -30,11 +30,15 @@ export function getListingsBundle(userId) {
     .prepare("SELECT updated_at AS updatedAt, source_file AS sourceFile FROM listing_meta WHERE user_id = ?")
     .get(userId) || { updatedAt: null, sourceFile: null };
 
-  const items = getDb().prepare(listingSelect).all(userId).map((item) => ({
-    ...item,
-    raw: JSON.parse(item.rawJson || "{}"),
-    rawJson: undefined,
-  }));
+  const items = getDb().prepare(listingSelect).all(userId).map((item) => {
+    const raw = JSON.parse(item.rawJson || "{}");
+    return {
+      ...item,
+      addresses: normalizeAddresses(raw.addresses),
+      raw,
+      rawJson: undefined,
+    };
+  });
 
   return {
     updatedAt: meta.updatedAt || null,
@@ -214,4 +218,16 @@ function insertListings(userId, items, offset = 0) {
   });
 
   return { inserted, skipped };
+}
+
+function normalizeAddresses(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({
+      name: String(entry.name || entry.title || entry.label || "").trim(),
+      coords: Array.isArray(entry.coords) ? entry.coords : [],
+      commuteTime: String(entry.commuteTime || entry.time || entry.duration || "").trim(),
+    }))
+    .filter((entry) => entry.name || entry.commuteTime || entry.coords.length);
 }

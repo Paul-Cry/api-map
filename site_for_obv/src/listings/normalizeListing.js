@@ -29,8 +29,21 @@ export function normalizeListing(item, index = 0) {
     utilities: toNumber(utilities),
     commuteHome: String(get("commuteHome", "home", "Родина") || ""),
     commuteWork: String(get("commuteWork", "work", "работа Оли") || ""),
+    addresses: normalizeAddresses(get("addresses")),
     raw: item,
   };
+}
+
+function normalizeAddresses(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({
+      name: String(entry.name || entry.title || entry.label || "").trim(),
+      coords: Array.isArray(entry.coords) ? entry.coords : [],
+      commuteTime: String(entry.commuteTime || entry.time || entry.duration || "").trim(),
+    }))
+    .filter((entry) => entry.name || entry.commuteTime || entry.coords.length);
 }
 
 function toNumber(value) {

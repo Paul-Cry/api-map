@@ -57,10 +57,10 @@
     .grade.C{background:var(--amber)}
     .grade.D,.grade.X{background:var(--red)}
     .timeCell{min-width:190px}
-    .timeGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .timeGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
     .timeBox{border:1px solid #cfe0f5;background:var(--accent-soft);border-radius:8px;padding:8px 9px;min-height:54px}
     .timeLabel{display:block;color:#52606d;font-size:11px;text-transform:uppercase;font-weight:850}
-    .timeValue{display:block;color:#0f3768;font-size:18px;font-weight:900;line-height:1.2;margin-top:2px;white-space:nowrap}
+    .timeValue{display:block;color:#0f3768;font-size:17px;font-weight:900;line-height:1.2;margin-top:2px;white-space:normal}
     .openBtn{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:7px;background:var(--accent);color:#fff;text-decoration:none;font-weight:850}
     .actions{display:flex;gap:8px;flex-wrap:wrap}
     .deleteBtn{min-height:34px;height:auto;border-color:#f0c7c3;background:#fff6f5;color:var(--red)}
@@ -81,7 +81,7 @@
       td{border:0;padding:8px 0;display:grid;grid-template-columns:108px 1fr;gap:10px;align-items:start}
       td:before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:850;text-transform:uppercase}
       .timeCell{min-width:0}
-      .timeGrid{grid-template-columns:1fr 1fr}
+      .timeGrid{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}
       .openBtn{width:100%}
     }
     @media(max-width:430px){
@@ -247,7 +247,8 @@
       const query = q.value.trim().toLowerCase();
       const wantedGrade = grade.value;
       let items = state.items.filter((item) => {
-        const haystack = [item.title, item.address, item.metro, item.terms, item.commuteHome, item.commuteWork].join(" ").toLowerCase();
+        const addressText = getAddressItems(item).map((address) => [address.name, address.commuteTime].join(" ")).join(" ");
+        const haystack = [item.title, item.address, item.metro, item.terms, item.commuteHome, item.commuteWork, addressText].join(" ").toLowerCase();
         return (!query || haystack.includes(query)) && (!wantedGrade || item.grade === wantedGrade);
       });
 
@@ -290,10 +291,27 @@
     }
 
     function timeTemplate(item) {
+      const addresses = getAddressItems(item);
+      if (addresses.length) {
+        return `<div class="timeGrid">${addresses.map((address) => `
+          <div class="timeBox"><span class="timeLabel">${escapeHtml(address.name || "Адрес")}</span><span class="timeValue">${escapeHtml(address.commuteTime || "-")}</span></div>
+        `).join("")}</div>`;
+      }
       return `<div class="timeGrid">
         <div class="timeBox"><span class="timeLabel">Дом</span><span class="timeValue">${escapeHtml(item.commuteHome || "-")}</span></div>
         <div class="timeBox"><span class="timeLabel">Работа</span><span class="timeValue">${escapeHtml(item.commuteWork || "-")}</span></div>
       </div>`;
+    }
+
+    function getAddressItems(item) {
+      const addresses = Array.isArray(item.addresses) ? item.addresses : item.raw && Array.isArray(item.raw.addresses) ? item.raw.addresses : [];
+      return addresses
+        .filter((address) => address && typeof address === "object" && !Array.isArray(address))
+        .map((address) => ({
+          name: String(address.name || address.title || address.label || "").trim(),
+          commuteTime: String(address.commuteTime || address.time || address.duration || "").trim()
+        }))
+        .filter((address) => address.name || address.commuteTime);
     }
 
     function numberOrMax(value) { return Number(value) > 0 ? Number(value) : Number.MAX_SAFE_INTEGER; }
