@@ -170,6 +170,91 @@ async function promptChoice(rl, question, allowed) {
   }
 }
 
+async function promptPositiveInteger(rl, question, defaultValue = '') {
+  while (true) {
+    const answer = await promptText(rl, question, defaultValue);
+    const value = Number(answer);
+    if (Number.isInteger(value) && value > 0) return value;
+    console.log('Введите положительное целое число.');
+  }
+}
+
+function parseCoords(value) {
+  const parts = String(value || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length !== 2) {
+    throw new Error('Координаты должны быть в формате: 55.717681, 37.607984');
+  }
+
+  const lat = Number(parts[0]);
+  const lon = Number(parts[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    throw new Error('Координаты должны быть числами.');
+  }
+
+  return [lat, lon];
+}
+
+async function promptRouteAddresses(rl, defaultAddresses = []) {
+  const defaultCount = Array.isArray(defaultAddresses) && defaultAddresses.length
+    ? String(defaultAddresses.length)
+    : '1';
+  const count = await promptPositiveInteger(rl, 'Сколько адресов для расчёта маршрутов', defaultCount);
+  const addresses = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const previous = Array.isArray(defaultAddresses) ? defaultAddresses[index] : null;
+    let name = '';
+    while (!name) {
+      name = await promptText(
+        rl,
+        `Название адреса ${index + 1}`,
+        previous?.name || ''
+      );
+      if (!name) console.log('Название адреса не должно быть пустым.');
+    }
+
+    while (true) {
+      const coordsText = await promptText(
+        rl,
+        `Координаты адреса "${name}"`,
+        Array.isArray(previous?.coords) ? previous.coords.join(', ') : ''
+      );
+      try {
+        addresses.push({ name, coords: parseCoords(coordsText) });
+        break;
+      } catch (error) {
+        console.log(error.message || error);
+      }
+    }
+  }
+
+  return addresses;
+}
+
+function parseAddressesJson(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed?.addresses)) return parsed.addresses;
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+async function resolveRouteAddressesArg(rl, state, addressesJsonValue) {
+  if (addressesJsonValue) return addressesJsonValue;
+
+  const defaults = parseAddressesJson(state.lastRouteAddressesJson || '[]');
+  const addresses = await promptRouteAddresses(rl, defaults);
+  return JSON.stringify(addresses);
+}
+
 async function validateApiUrl(apiUrl) {
   const normalized = apiUrl.replace(/\/+$/g, '');
   const response = await fetch(`${normalized}/api/status`, {
@@ -259,7 +344,8 @@ async function runBatchMode(inputPath, headless, saveHtml, extraPythonArgs = [])
 async function runApiMode(rl, state, extraPythonArgs = []) {
   const apiOption = consumeOption(extraPythonArgs, ['--api-url']);
   const proxyOption = consumeOption(apiOption.rest, ['--proxy']);
-  const passthroughArgs = proxyOption.rest;
+  const addressesOption = consumeOption(proxyOption.rest, ['--addresses-json', '--destinations-json']);
+  const passthroughArgs = addressesOption.rest;
   const defaultApiUrl = state.lastApiUrl || 'http://127.0.0.1:8787';
   let apiUrl = '';
 
@@ -286,11 +372,13 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
   const proxyValue = proxyOption.value
     ? normalizeProxyInput(proxyOption.value)
     : normalizeProxyInput(await promptText(rl, 'Proxy URL (leave empty for none)', defaultProxy));
+  const addressesJson = await resolveRouteAddressesArg(rl, state, addressesOption.value);
 
   await saveState({
     ...state,
     lastApiUrl: apiUrl,
     lastProxy: proxyValue,
+    lastRouteAddressesJson: addressesJson,
   });
 
   console.log('');
@@ -302,6 +390,8 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
     '--api-url',
     apiUrl,
     ...(proxyValue ? ['--proxy', proxyValue] : []),
+    '--addresses-json',
+    addressesJson,
     ...passthroughArgs,
   ].join(' ')}`);
   console.log('');
@@ -310,6 +400,8 @@ async function runApiMode(rl, state, extraPythonArgs = []) {
     '--api-url',
     apiUrl,
     ...(proxyValue ? ['--proxy', proxyValue] : []),
+    '--addresses-json',
+    addressesJson,
     ...passthroughArgs,
   ]);
 }
@@ -335,7 +427,8 @@ async function runApiProxyFileMode(rl, state, extraPythonArgs = []) {
   const apiOption = consumeOption(extraPythonArgs, ['--api-url']);
   const proxyFileOption = consumeOption(apiOption.rest, ['--proxy-file', '--proxies']);
   const limitOption = consumeOption(proxyFileOption.rest, ['--limit']);
-  const passthroughArgs = limitOption.rest;
+  const addressesOption = consumeOption(limitOption.rest, ['--addresses-json', '--destinations-json']);
+  const passthroughArgs = addressesOption.rest;
 
   let apiUrl = '';
   try {
@@ -374,9 +467,12 @@ async function runApiProxyFileMode(rl, state, extraPythonArgs = []) {
     return 1;
   }
 
+  const addressesJson = await resolveRouteAddressesArg(rl, state, addressesOption.value);
+
   await saveState({
     ...state,
     lastApiUrl: apiUrl,
+    lastRouteAddressesJson: addressesJson,
   });
 
   const runId = Date.now().toString(36);
@@ -394,6 +490,8 @@ async function runApiProxyFileMode(rl, state, extraPythonArgs = []) {
         proxyValue,
         '--worker-id',
         workerId,
+        '--addresses-json',
+        addressesJson,
         ...passthroughArgs,
       ],
     };
@@ -404,6 +502,7 @@ async function runApiProxyFileMode(rl, state, extraPythonArgs = []) {
   console.log(`  API URL:     ${apiUrl}`);
   console.log(`  Proxy file:  ${proxyData.resolvedPath}`);
   console.log(`  Workers:     ${commands.length}`);
+  console.log(`  Addresses:   ${parseAddressesJson(addressesJson).length}`);
   console.log(`  Extra args:  ${passthroughArgs.length ? passthroughArgs.join(' ') : '(none)'}`);
   console.log('');
 

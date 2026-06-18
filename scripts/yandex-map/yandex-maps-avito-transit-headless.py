@@ -53,11 +53,13 @@ DEFAULT_USER_AGENT = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
-DESTINATIONS = [
+DEFAULT_DESTINATIONS = [
     {
         "key": "работа",
         "label": "работа",
+        "name": "work",
         "coords": "55.806980,37.502579",
+        "outputCoords": [55.806980, 37.502579],
     },
 ]
 
@@ -223,7 +225,66 @@ def with_moscow_hint(address: str) -> str:
     return f"{text}, Москва"
 
 
-def build_jobs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def parse_coords(value: Any) -> tuple[str, list[float]]:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        lat = float(value[0])
+        lon = float(value[1])
+        return f"{lat:.6f},{lon:.6f}", [lat, lon]
+
+    text = normalize_text(value)
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) != 2:
+        raise ValueError("coords must be [lat, lon] or 'lat, lon'")
+
+    lat = float(parts[0])
+    lon = float(parts[1])
+    return f"{lat:.6f},{lon:.6f}", [lat, lon]
+
+
+def normalize_destinations(value: Any = None) -> list[dict[str, Any]]:
+    if value is None or value == "":
+        return deepcopy(DEFAULT_DESTINATIONS)
+
+    parsed = value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--addresses-json must be valid JSON") from exc
+
+    if isinstance(parsed, dict) and isinstance(parsed.get("addresses"), list):
+        parsed = parsed["addresses"]
+
+    if not isinstance(parsed, list):
+        raise ValueError("addresses must be a JSON array")
+
+    destinations: list[dict[str, Any]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ValueError("each address must be an object")
+
+        name = normalize_text(item.get("name") or item.get("label") or item.get("key"))
+        if not name:
+            name = f"Address {index + 1}"
+
+        route_coords, output_coords = parse_coords(item.get("coords"))
+        destinations.append(
+            {
+                "key": name,
+                "label": name,
+                "name": name,
+                "coords": route_coords,
+                "outputCoords": output_coords,
+            }
+        )
+
+    if not destinations:
+        raise ValueError("at least one address is required")
+
+    return destinations
+
+
+def build_jobs(items: list[dict[str, Any]], destinations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
 
     for item_index, item in enumerate(items):
@@ -231,11 +292,12 @@ def build_jobs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not origin:
             continue
 
-        for destination in DESTINATIONS:
+        for destination_index, destination in enumerate(destinations):
             destination_name = destination["label"]
             jobs.append(
                 {
                     "itemIndex": item_index,
+                    "destinationIndex": destination_index,
                     "origin": origin,
                     "destination": f"{destination['coords']}",
                     "destinationKey": destination["key"],
@@ -444,6 +506,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_API_TIMEOUT_MS,
         help=f"HTTP timeout for worker API calls in milliseconds (default: {DEFAULT_API_TIMEOUT_MS}).",
     )
+    parser.add_argument(
+        "--addresses-json",
+        default="",
+        help='JSON array of route target addresses, for example [{"name":"School","coords":[55.717681,37.607984]}].',
+    )
     return parser.parse_args()
 
 
@@ -477,6 +544,7 @@ async def fetch_route_duration(
 
 async def process_items(
     items: list[dict[str, Any]],
+    destinations: list[dict[str, Any]],
     output_path: Path | None,
     timeout_ms: int,
     delay_ms: int,
@@ -485,7 +553,7 @@ async def process_items(
     proxy_config: ProxyConfig | None = None,
     progress_tracker: WorkerProgressTracker | None = None,
 ) -> list[dict[str, Any]]:
-    jobs = build_jobs(items)
+    jobs = build_jobs(items, destinations)
     if not jobs:
         raise ValueError("Не нашёл объектов с полем adress, address или адрес.")
 
@@ -503,6 +571,15 @@ async def process_items(
         html_dir.mkdir(parents=True, exist_ok=True)
 
     result_items = deepcopy(items)
+    for result_item in result_items:
+        result_item["addresses"] = [
+            {
+                "name": destination["name"],
+                "coords": destination["outputCoords"],
+                "commuteTime": None,
+            }
+            for destination in destinations
+        ]
     total = len(jobs)
 
     async with AsyncWebCrawler(config=browser_config) as crawler:
@@ -532,7 +609,7 @@ async def process_items(
             if not duration:
                 duration = "время не найдено"
 
-            result_items[item_index][job["destinationKey"]] = duration
+            result_items[item_index]["addresses"][job["destinationIndex"]]["commuteTime"] = duration
             print(f"  = {duration} ({source or 'no source'})")
 
             if progress_tracker is not None:
@@ -704,9 +781,9 @@ class WorkerProgressTracker:
         }
 
 
-def make_worker_progress(items: list[dict[str, Any]], routes_done: int = 0) -> dict[str, Any]:
+def make_worker_progress(items: list[dict[str, Any]], destinations: list[dict[str, Any]], routes_done: int = 0) -> dict[str, Any]:
     objects_total = len(items)
-    routes_total = objects_total * len(DESTINATIONS)
+    routes_total = objects_total * len(destinations)
     routes_done = max(0, min(int(routes_done), routes_total))
     objects_done = objects_total if routes_total and routes_done >= routes_total else 0
     current_object_index = None if not routes_total or routes_done >= routes_total else 1
@@ -735,6 +812,7 @@ async def run_api_worker(
     proxy_config: ProxyConfig | None,
     worker_poll_ms: int,
     api_timeout_ms: int,
+    destinations: list[dict[str, Any]],
     worker_id: str | None = None,
 ) -> int:
     worker_id_value = normalize_text(worker_id) or make_worker_id()
@@ -760,7 +838,7 @@ async def run_api_worker(
                     "name": "Crawl4AI Yandex worker",
                     "status": "ready",
                     "currentJobId": None,
-                    "progress": make_worker_progress([], 0),
+                    "progress": make_worker_progress([], destinations, 0),
                 },
                 timeout_ms=api_timeout_ms,
             )
@@ -805,7 +883,7 @@ async def run_api_worker(
                         "name": "Crawl4AI Yandex worker",
                         "status": "busy",
                         "currentJobId": job_id,
-                        "progress": make_worker_progress(items, 0),
+                        "progress": make_worker_progress(items, destinations, 0),
                     },
                     timeout_ms=api_timeout_ms,
                 )
@@ -815,6 +893,7 @@ async def run_api_worker(
             try:
                 result_items = await process_items(
                     items=items,
+                    destinations=destinations,
                     output_path=None,
                     timeout_ms=timeout_ms,
                     delay_ms=delay_ms,
@@ -872,7 +951,7 @@ async def run_api_worker(
                         "name": "Crawl4AI Yandex worker",
                         "status": "ready",
                         "currentJobId": None,
-                        "progress": make_worker_progress(result_items, len(result_items) * len(DESTINATIONS)),
+                        "progress": make_worker_progress(result_items, destinations, len(result_items) * len(destinations)),
                     },
                     timeout_ms=api_timeout_ms,
                 )
@@ -898,6 +977,7 @@ async def run_api_worker_connected(
     proxy_config: ProxyConfig | None,
     worker_poll_ms: int,
     api_timeout_ms: int,
+    destinations: list[dict[str, Any]],
     worker_id: str | None = None,
 ) -> int:
     worker_id_value = normalize_text(worker_id) or make_worker_id()
@@ -1067,12 +1147,13 @@ async def run_api_worker_connected(
             if not items:
                 result_items: list[dict[str, Any]] = []
             else:
-                tracker = WorkerProgressTracker(items=items, jobs=build_jobs(items))
+                tracker = WorkerProgressTracker(items=items, jobs=build_jobs(items, destinations))
                 await set_state(tracker=tracker, status="busy", current_job_id=job_id, last_error="")
 
                 try:
                     result_items = await process_items(
                         items=items,
+                        destinations=destinations,
                         output_path=None,
                         timeout_ms=timeout_ms,
                         delay_ms=delay_ms,
@@ -1143,6 +1224,12 @@ async def main_async() -> int:
         print(f"Invalid API URL: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        destinations = normalize_destinations(args.addresses_json)
+    except Exception as exc:
+        print(f"Invalid route addresses: {exc}", file=sys.stderr)
+        return 1
+
     if api_url:
         try:
             proxy_config = resolve_proxy_config(args.proxy)
@@ -1165,6 +1252,7 @@ async def main_async() -> int:
             proxy_config=proxy_config,
             worker_poll_ms=args.worker_poll_ms,
             api_timeout_ms=args.api_timeout_ms,
+            destinations=destinations,
             worker_id=worker_id,
         )
 
@@ -1195,6 +1283,7 @@ async def main_async() -> int:
     try:
         await process_items(
             items=items,
+            destinations=destinations,
             output_path=output_path,
             timeout_ms=args.timeout_ms,
             delay_ms=args.delay_ms,
