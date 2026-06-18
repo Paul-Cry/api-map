@@ -678,8 +678,6 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     { label: 'Итого в месяц' },
     { label: 'До адреса' },
   ];
-  if (hasTwoRoutes) baseColumns.push({ label: 'До второго адреса' });
-
   const cheap = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
   const expensiveRows = rows.slice().sort((a, b) => b.rent - a.rent);
   const olya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
@@ -4262,9 +4260,6 @@ const analyticsPage = String.raw`<!doctype html>
         { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
         { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
       ];
-      if (hasTwoRoutes) {
-        baseColumns.push({ label: 'До второго адреса', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' });
-      }
       const cheap = state.rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
       const olya = state.rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
@@ -4776,9 +4771,6 @@ const analyticsPage = String.raw`<!doctype html>
         { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
         { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
       ];
-      if (hasTwoRoutes) {
-        baseColumns.push({ label: 'До второго адреса', render: (row) => '<span class="time">' + minutesText(row.nikita) + '</span>' });
-      }
 
       const tableColumns = {
         cheap: baseColumns,
