@@ -236,15 +236,11 @@
   }
 
   function isRunActiveInCurrentTab() {
-    return sessionStorage.getItem(RUN_ACTIVE_KEY) === '1';
+    return GM_getValue(RUN_ACTIVE_KEY, false) === true;
   }
 
   function setRunActiveInCurrentTab(active) {
-    if (active) {
-      sessionStorage.setItem(RUN_ACTIVE_KEY, '1');
-    } else {
-      sessionStorage.removeItem(RUN_ACTIVE_KEY);
-    }
+    GM_setValue(RUN_ACTIVE_KEY, active === true);
   }
 
   function timestamp() {
@@ -443,6 +439,37 @@
     return null;
   }
 
+  function getPageNumberFromUrl(url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      return Number(parsed.searchParams.get('p') || '1') || 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  function findNextPageHrefByNumber() {
+    const currentPage = getPageNumberFromUrl(location.href);
+    const expectedPage = String(currentPage + 1);
+    const currentPath = location.pathname;
+    const links = Array.from(document.querySelectorAll('a[href*="p="]'));
+
+    for (const link of links) {
+      if (!isElementVisible(link)) continue;
+
+      try {
+        const parsed = new URL(link.href, location.origin);
+        if (parsed.pathname === currentPath && parsed.searchParams.get('p') === expectedPage) {
+          return parsed.href;
+        }
+      } catch {
+        // Ignore malformed hrefs from widgets and ads.
+      }
+    }
+
+    return null;
+  }
+
   async function scrollPageForPagination(durationMs = AUTO_SCROLL_DURATION_MS) {
     const endAt = Date.now() + durationMs;
     while (Date.now() < endAt) {
@@ -457,13 +484,29 @@
 
   async function clickNextPage() {
     const element = findNextPageElement();
-    if (!element) {
+    const numericNextHref = findNextPageHrefByNumber();
+    if (!element && !numericNextHref) {
       return false;
     }
 
-    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-    await sleep(300);
-    element.click();
+    setRunActiveInCurrentTab(true);
+
+    if (element) {
+      const link = element.closest('a[href]') || element.querySelector?.('a[href]');
+      const href = link?.href || (element.tagName === 'A' ? element.href : null);
+
+      element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+      await sleep(300);
+
+      if (href) {
+        location.href = href;
+      } else {
+        element.click();
+      }
+    } else {
+      location.href = numericNextHref;
+    }
+
     return true;
   }
 
@@ -511,6 +554,9 @@
       const url = location.href;
       const processedUrls = getProcessedUrls();
       if (processedUrls.includes(url)) {
+        if (session.running) {
+          advanceToNextPage();
+        }
         log(`Страница уже собрана: ${url}`);
         return;
       }

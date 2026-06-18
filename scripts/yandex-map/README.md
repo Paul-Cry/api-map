@@ -122,3 +122,8 @@ npm.cmd run yandex:headless -- input.json --proxy http://user:pass@ip:port
 ```
 
 `yandex` opens the interactive launcher, `yandex:headless` starts the Python runner, and `yandex:api` starts the API worker mode.
+
+
+
+Теперь есть новая команда, которая читает .txt со списком прокси и запускает API-worker для каждого прокси:
+npm.cmd run yandex:api:proxies -- --api-url http://127.0.0.1:8787 --proxy-file C:\path\to\proxies.txt
