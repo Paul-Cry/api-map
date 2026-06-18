@@ -36,6 +36,7 @@ function loadAdminKey() {
 
 const ADMIN_KEY = loadAdminKey();
 const preferredFilterTimeKeys = ['работа', 'работа 2', 'commuteWork', 'commuteHome'];
+const MAX_ROUTE_MINUTES = 24 * 60;
 const ignoredFilterTimeKeyNames = new Set([
   'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
   'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
@@ -152,7 +153,9 @@ function isCompactFilterTimeValue(value) {
 }
 
 function parseTransitMinutes(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 && value <= MAX_ROUTE_MINUTES ? value : Number.POSITIVE_INFINITY;
+  }
 
   const text = String(value ?? '').toLowerCase().replace(',', '.');
   if (!text || text.includes('ошиб') || text.includes('не найден')) return Number.POSITIVE_INFINITY;
@@ -162,8 +165,14 @@ function parseTransitMinutes(value) {
   const numberOnly = text.match(/^\s*(\d+)\s*$/);
   const total = (hourMatch ? Number(hourMatch[1]) * 60 : 0) + (minuteMatch ? Number(minuteMatch[1]) : 0);
 
-  if (total > 0) return Math.round(total);
-  if (numberOnly) return Number(numberOnly[1]);
+  if (total > 0) {
+    const minutes = Math.round(total);
+    return minutes <= MAX_ROUTE_MINUTES ? minutes : Number.POSITIVE_INFINITY;
+  }
+  if (numberOnly) {
+    const minutes = Number(numberOnly[1]);
+    return minutes > 0 && minutes <= MAX_ROUTE_MINUTES ? minutes : Number.POSITIVE_INFINITY;
+  }
   return Number.POSITIVE_INFINITY;
 }
 
@@ -301,7 +310,9 @@ function detectAnalyticsTimeKeys(items) {
 }
 
 function parseTime(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 && value <= MAX_ROUTE_MINUTES ? value : Infinity;
+  }
   const text = String(value ?? '').toLowerCase();
   if (!text.trim()) return Infinity;
   let total = 0;
@@ -315,7 +326,8 @@ function parseTime(value) {
     const onlyNumber = text.match(/^\s*(\d+)\s*$/);
     if (onlyNumber) total = Number(onlyNumber[1]);
   }
-  return total || Infinity;
+  if (!total || total > MAX_ROUTE_MINUTES) return Infinity;
+  return total;
 }
 
 function chooseAnalyticsKey(preferredKey, timeKeys, matcher) {
@@ -325,9 +337,9 @@ function chooseAnalyticsKey(preferredKey, timeKeys, matcher) {
 }
 
 function chooseSecondAnalyticsKey(preferredKey, timeKeys, firstKey, matcher) {
-  if (preferredKey && preferredKey !== firstKey && timeKeys.includes(preferredKey)) return preferredKey;
+  if (preferredKey && preferredKey !== firstKey && timeKeys.includes(preferredKey) && matcher.test(preferredKey)) return preferredKey;
   const match = timeKeys.find((key) => key !== firstKey && matcher.test(key));
-  return match || timeKeys.find((key) => key !== firstKey) || '';
+  return match || '';
 }
 
 function getAnalyticsTitle(item) {
@@ -1785,6 +1797,7 @@ const page = String.raw`<!doctype html>
 
   <script>
     const preferredTimeKeys = ['работа', 'работа 2'];
+    const MAX_ROUTE_MINUTES = 24 * 60;
     const ignoredTimeKeyNames = new Set([
       'address', 'adress', 'адрес', 'description', 'desc', 'описание', 'dop',
       'title', 'name', 'название', 'price', 'цена', 'url', 'link', 'href', 'avitourl',
@@ -1926,7 +1939,9 @@ const page = String.raw`<!doctype html>
     }
 
     function parseTransitMinutes(value) {
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value > 0 && value <= MAX_ROUTE_MINUTES ? value : Number.POSITIVE_INFINITY;
+      }
 
       const text = String(value ?? '').toLowerCase().replace(',', '.');
       if (!text || text.includes('ошиб') || text.includes('не найден')) return Number.POSITIVE_INFINITY;
@@ -1938,8 +1953,14 @@ const page = String.raw`<!doctype html>
         (hourMatch ? Number(hourMatch[1]) * 60 : 0) +
         (minuteMatch ? Number(minuteMatch[1]) : 0);
 
-      if (total > 0) return Math.round(total);
-      if (numberOnly) return Number(numberOnly[1]);
+      if (total > 0) {
+        const minutes = Math.round(total);
+        return minutes <= MAX_ROUTE_MINUTES ? minutes : Number.POSITIVE_INFINITY;
+      }
+      if (numberOnly) {
+        const minutes = Number(numberOnly[1]);
+        return minutes > 0 && minutes <= MAX_ROUTE_MINUTES ? minutes : Number.POSITIVE_INFINITY;
+      }
       return Number.POSITIVE_INFINITY;
     }
 
@@ -3542,7 +3563,9 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function parseTime(value) {
-      if (typeof value === 'number') return value;
+      if (typeof value === 'number') {
+        return Number.isFinite(value) && value > 0 && value <= MAX_ROUTE_MINUTES ? value : Infinity;
+      }
       const text = String(value ?? '').toLowerCase();
       if (!text.trim()) return Infinity;
       let total = 0;
@@ -3556,7 +3579,8 @@ const analyticsPage = String.raw`<!doctype html>
         const onlyNumber = text.match(/^\s*(\d+)\s*$/);
         if (onlyNumber) total = Number(onlyNumber[1]);
       }
-      return total || Infinity;
+      if (!total || total > MAX_ROUTE_MINUTES) return Infinity;
+      return total;
     }
 
     function getTitle(item) {
@@ -4102,7 +4126,7 @@ const analyticsPage = String.raw`<!doctype html>
       els.olyaKey.innerHTML = options;
       els.nikitaKey.innerHTML = '<option value="">Нет второго адреса</option>' + options;
       const olya = state.timeKeys.find((key) => /commutework|оли|ol/i.test(key)) || state.timeKeys[0] || '';
-      const nikita = state.timeKeys.find((key) => key !== olya && /commutehome|родина|никит|nik/i.test(key)) || state.timeKeys.find((key) => key !== olya) || '';
+      const nikita = state.timeKeys.find((key) => key !== olya && /commutehome|родина|никит|nik/i.test(key)) || '';
       els.olyaKey.value = olya;
       els.nikitaKey.value = nikita;
     }

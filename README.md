@@ -1,3 +1,13 @@
+
+
+
+cd C:\Users\0\Documents\api-map
+npm install
+npm start
+
+
+
+
 # Avito Parser
 
 Userscript для Tampermonkey, который автоматически запускается на Avito и собирает видимые карточки объявлений в массив `items`.
