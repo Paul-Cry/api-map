@@ -101,10 +101,102 @@ function rub(value) {
 }
 
 function minutesText(value) {
-  if (!Number.isFinite(value)) return 'нет';
+  if (!Number.isFinite(value)) return 'нет данных';
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
   return (hours ? hours + ' ч ' : '') + minutes + ' мин';
+}
+
+function isAnalyticsRouteKey(key) {
+  return /время|маршрут|дорог|путь|работ|родин|commute|time|route|avgcommute|maxcommute/i.test(String(key || ''));
+}
+
+function normalizeAddressTimeKeys(item) {
+  if (!Array.isArray(item?.addresses)) return [];
+  return item.addresses
+    .map((address, index) => {
+      const value = address?.commuteTime ?? address?.time ?? address?.duration;
+      return Number.isFinite(parseTime(value)) ? 'addresses.' + index + '.commuteTime' : null;
+    })
+    .filter(Boolean);
+}
+
+function getAnalyticsRouteValue(item, key) {
+  const addressMatch = String(key || '').match(/^addresses\.(\d+)\.commuteTime$/);
+  if (addressMatch) {
+    const address = item?.addresses?.[Number(addressMatch[1])];
+    return address?.commuteTime ?? address?.time ?? address?.duration;
+  }
+  return item?.[key];
+}
+
+function getAnalyticsRoutes(item, routeKeys = []) {
+  if (Array.isArray(item?.addresses) && item.addresses.length) {
+    return item.addresses
+      .map((address, index) => {
+        const rawTime = address?.commuteTime ?? address?.time ?? address?.duration ?? '';
+        const name = String(address?.name || '').trim() || 'адрес ' + (index + 1);
+        return {
+          name,
+          coords: Array.isArray(address?.coords) ? address.coords : [],
+          commuteTime: String(rawTime || '').trim(),
+          minutes: parseTime(rawTime),
+        };
+      })
+      .filter((route) => route.name || route.commuteTime || route.coords.length);
+  }
+
+  return routeKeys
+    .map((key, index) => {
+      const rawTime = getAnalyticsRouteValue(item, key);
+      return {
+        name: index === 0 ? 'адрес' : 'адрес ' + (index + 1),
+        coords: [],
+        commuteTime: String(rawTime || '').trim(),
+        minutes: parseTime(rawTime),
+      };
+    })
+    .filter((route) => Number.isFinite(route.minutes) || route.commuteTime);
+}
+
+function collectAnalyticsRouteLabels(rows) {
+  const maxRoutes = Math.max(0, ...rows.map((row) => Array.isArray(row.routes) ? row.routes.length : 0));
+  return Array.from({ length: maxRoutes }, (_, index) => {
+    const route = rows.map((row) => row.routes?.[index]).find((entry) => entry?.name);
+    return route?.name || 'адрес ' + (index + 1);
+  });
+}
+
+function routeMinutes(row) {
+  return (Array.isArray(row?.routes) ? row.routes : [])
+    .map((route) => Number(route?.minutes))
+    .filter(Number.isFinite);
+}
+
+function routeAverage(row) {
+  const minutes = routeMinutes(row);
+  return minutes.length ? average(minutes) : Infinity;
+}
+
+function routeMax(row) {
+  const minutes = routeMinutes(row);
+  return minutes.length ? Math.max(...minutes) : Infinity;
+}
+
+function routeDiff(row) {
+  const minutes = routeMinutes(row);
+  return minutes.length > 1 ? Math.max(...minutes) - Math.min(...minutes) : 0;
+}
+
+function routeBalanceType(row) {
+  const minutes = routeMinutes(row);
+  if (minutes.length < 2) return 'один адрес';
+  const diff = Math.max(...minutes) - Math.min(...minutes);
+  if (diff === 0) return 'одинаково';
+  if (diff <= 15) return 'почти одинаково';
+  if (diff <= 30) return 'разница 16-30 мин';
+  if (diff <= 60) return 'разница 31-60 мин';
+  return 'разница больше 60 мин';
 }
 
 function readFilterItemsFromText(text) {
@@ -290,12 +382,15 @@ function detectAnalyticsTimeKeys(items) {
   ]);
   const keys = [];
   items.slice(0, 80).forEach((item) => {
+    normalizeAddressTimeKeys(item).forEach((key) => {
+      if (!keys.includes(key)) keys.push(key);
+    });
     Object.keys(item || {}).forEach((key) => {
       const lower = key.toLowerCase();
       if (ignored.has(lower) || keys.includes(key)) return;
       const value = item[key];
       const text = String(value ?? '').toLowerCase();
-      const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|commute|time|route/.test(lower);
+      const looksLikeRoute = isAnalyticsRouteKey(lower);
       const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
       if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
         if (typeof value === 'number' && !looksLikeRoute) return;
@@ -339,7 +434,7 @@ function chooseAnalyticsKey(preferredKey, timeKeys, matcher) {
 function chooseSecondAnalyticsKey(preferredKey, timeKeys, firstKey, matcher) {
   if (preferredKey && preferredKey !== firstKey && timeKeys.includes(preferredKey) && matcher.test(preferredKey)) return preferredKey;
   const match = timeKeys.find((key) => key !== firstKey && matcher.test(key));
-  return match || '';
+  return match || timeKeys.find((key) => key !== firstKey) || '';
 }
 
 function getAnalyticsTitle(item) {
@@ -470,17 +565,6 @@ function moveInCategory(startPayment, rent) {
   return 'дорогой вход';
 }
 
-function balanceType(olya, nikita) {
-  if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
-  const diff = Math.abs(olya - nikita);
-  if (diff === 0) return 'одинаково';
-  const side = olya < nikita ? 'первый адрес быстрее' : 'второй адрес быстрее';
-  if (diff <= 15) return 'почти одинаково, ' + side;
-  if (diff <= 30) return 'разница 16-30 мин, ' + side;
-  if (diff <= 60) return 'разница 31-60 мин, ' + side;
-  return 'разница больше 60 мин, ' + side;
-}
-
 function average(values) {
   const good = values.filter((value) => Number.isFinite(value));
   return good.length ? good.reduce((sum, value) => sum + value, 0) / good.length : 0;
@@ -528,9 +612,8 @@ function getPeriodLabel(rows) {
   return 'за месяц';
 }
 
-function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) {
-  const routeKeys = [...new Set([olyaKey, nikitaKey].filter(Boolean))];
-  const hasTwoRoutes = routeKeys.length > 1;
+function buildAnalyticsView(items, { fastLimit, timeKeys }) {
+  const routeKeys = Array.isArray(timeKeys) ? timeKeys.filter(Boolean) : [];
   const baseRows = items.map((item, index) => {
     const rent = getRent(item);
     const months = getMonths(item);
@@ -538,13 +621,11 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     const area = parseArea(item);
     const rooms = parseRooms(item);
     const floorInfo = parseFloorInfo(item);
-    const olya = parseTime(item[olyaKey]);
-    const nikita = hasTwoRoutes ? parseTime(item[nikitaKey]) : Infinity;
-    const avgCommute = hasTwoRoutes
-      ? (Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity)
-      : olya;
-    const maxCommute = hasTwoRoutes ? Math.max(olya, nikita) : olya;
-    const diffTime = hasTwoRoutes ? Math.abs(olya - nikita) : Infinity;
+    const routes = getAnalyticsRoutes(item, routeKeys);
+    const routeStatsRow = { routes };
+    const avgCommute = routeAverage(routeStatsRow);
+    const maxCommute = routeMax(routeStatsRow);
+    const diffTime = routeDiff(routeStatsRow);
     const commission = getCommission(item);
     const deposit = getDeposit(item) || getDepositFromText(item, rent);
     const startPayment = rent + commission + deposit;
@@ -574,12 +655,11 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
       priceM2,
       dailyRent,
       rubPerCommuteMin,
-      olya,
-      nikita,
+      routes,
       avgCommute,
       maxCommute,
       diffTime,
-      balanceType: balanceType(olya, nikita),
+      balanceType: routeBalanceType(routeStatsRow),
     };
   }).filter((row) => row.rent > 0);
 
@@ -624,14 +704,13 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const rents = rows.map((row) => row.rent);
   const totals = rows.map((row) => row.total);
   const startPayments = rows.map((row) => row.startPayment);
-  const olyaTimes = rows.map((row) => row.olya);
-  const nikitaTimes = rows.map((row) => row.nikita);
   const avgTimes = rows.map((row) => row.avgCommute);
   const diffTimes = rows.map((row) => row.diffTime);
   const rubPerMinute = rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
-  const fastBoth = hasTwoRoutes
-    ? rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit)
-    : rows.filter((row) => row.olya <= fastLimit);
+  const fastRows = rows.filter((row) => {
+    const minutes = routeMinutes(row);
+    return minutes.length > 0 && minutes.every((value) => value <= fastLimit);
+  });
   const midRange = rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
   const midRangeRentMedian = median(midRange.map((row) => row.rent));
   const midRangeTotalMedian = median(midRange.map((row) => row.total));
@@ -642,21 +721,14 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
     ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
     ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-    ['Среднее время в дороге', minutesText(Math.round(average(olyaTimes))), 'по всем квартирам с маршрутом'],
+    ['Среднее время в дороге', minutesText(Math.round(average(avgTimes))), 'по всем адресам в объявлении'],
   ];
 
-  if (hasTwoRoutes) {
-    metricsList.push(
-      ['Среднее до второго адреса', minutesText(Math.round(average(nikitaTimes))), 'по всем квартирам с маршрутом'],
-      ['Среднее для двух адресов', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
-      ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'насколько отличаются маршруты'],
-    );
-  }
-
   metricsList.push(
+    ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'разброс между маршрутами в одном объявлении'],
     ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
     ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
-    [hasTwoRoutes ? 'Быстрые для двух адресов' : 'Быстрые по времени в дороге', fastBoth.length, hasTwoRoutes ? 'до ' + fastLimit + ' мин к каждому адресу' : 'до ' + fastLimit + ' мин до выбранного адреса'],
+    ['Быстрые по всем адресам', fastRows.length, 'до ' + fastLimit + ' мин к каждому адресу'],
     ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
     ['Медиана расходов 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', месячный итог'],
     ['Медиана расходов за месяц', rub(median(totals)), 'аренда + комиссия, без залога'],
@@ -667,30 +739,26 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
 
   const cheapest = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent)[0];
   const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
-  const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
+  const quickest = rows.filter((row) => Number.isFinite(row.maxCommute)).sort((a, b) => a.maxCommute - b.maxCommute)[0];
   const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
   const insightList = [
     ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
     ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
-    ['Самый быстрый до адреса', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных'],
+    ['Самый быстрый по адресам', quickest ? minutesText(quickest.maxCommute) + '<br>' + rub(quickest.rent) : 'нет данных'],
+    ['Лучший баланс цены и дороги', balanced ? minutesText(Math.round(balanced.avgCommute)) + '<br>' + rub(balanced.rent) : 'нет данных'],
   ];
-  if (hasTwoRoutes) {
-    insightList.push(['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных']);
-  } else {
-    insightList.push(['Лучший баланс цены и дороги', balanced ? minutesText(balanced.olya) + '<br>' + rub(balanced.rent) : 'нет данных']);
-  }
   const insights = insightList.map(([title, body]) => ({ title, body }));
+  const routeLabels = collectAnalyticsRouteLabels(rows);
 
   const baseColumns = [
     { label: 'Объект' },
     { label: 'Аренда' },
     { label: 'Итого в месяц' },
-    { label: 'До адреса' },
+    ...routeLabels.map((label) => ({ label })),
   ];
   const cheap = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
   const expensiveRows = rows.slice().sort((a, b) => b.rent - a.rent);
-  const olya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
-  const nikita = rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+  const fastest = rows.filter((row) => Number.isFinite(row.maxCommute)).sort((a, b) => a.maxCommute - b.maxCommute || a.rent - b.rent);
   const balancedRows = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
   const score = rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
   const start = rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
@@ -699,21 +767,19 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const tableRows = {
     cheap: cheap.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
     expensive: expensiveRows.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
-    olya: olya.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
-    nikita: nikita.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
+    fastest: fastest.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
     balanced: balancedRows.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
     score: score.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
     start: start.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
     minute: minute.slice(0, ANALYTICS_PREVIEW_LIMIT).map(compactAnalyticsRow),
-    buckets: buildAnalyticsBuckets(rows, hasTwoRoutes),
-    categories: buildAnalyticsCategories(rows, hasTwoRoutes),
+    buckets: buildAnalyticsBuckets(rows),
+    categories: buildAnalyticsCategories(rows),
   };
 
   const tableCounts = {
     cheap: cheap.length,
     expensive: expensiveRows.length,
-    olya: olya.length,
-    nikita: nikita.length,
+    fastest: fastest.length,
     balanced: balancedRows.length,
     score: score.length,
     start: start.length,
@@ -723,8 +789,7 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
   const tableColumns = {
     cheap: baseColumns,
     expensive: baseColumns,
-    olya: baseColumns,
-    nikita: baseColumns,
+    fastest: baseColumns,
     balanced: [...baseColumns, { label: 'Баланс' }],
     score: [...baseColumns, { label: 'Оценка' }],
     start: [...baseColumns, { label: 'Стартовый платёж' }],
@@ -747,14 +812,13 @@ function buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys }) 
     ],
   };
 
-  const tableHighlights = { cheap: 8, expensive: 8, olya: 10, nikita: 10, balanced: 10, score: 10, start: 10, minute: 10 };
+  const tableHighlights = { cheap: 8, expensive: 8, fastest: 10, balanced: 10, score: 10, start: 10, minute: 10 };
 
   return {
     timeKeys,
-    olyaKey,
-    nikitaKey,
     fastLimit,
     rows: rows.map(compactAnalyticsRow),
+    routeLabels,
     metrics,
     insights,
     tableRows,
@@ -789,8 +853,7 @@ function compactAnalyticsRow(row) {
     priceM2,
     dailyRent,
     rubPerCommuteMin,
-    olya,
-    nikita,
+    routes,
     avgCommute,
     maxCommute,
     diffTime,
@@ -811,6 +874,7 @@ function compactAnalyticsRow(row) {
     title,
     address,
     url,
+    addresses: Array.isArray(item?.addresses) ? item.addresses : [],
     rent,
     total,
     months,
@@ -828,8 +892,7 @@ function compactAnalyticsRow(row) {
     priceM2,
     dailyRent,
     rubPerCommuteMin,
-    olya,
-    nikita,
+    routes: Array.isArray(routes) ? routes : [],
     avgCommute,
     maxCommute,
     diffTime,
@@ -865,22 +928,27 @@ function getAnalyticsImageUrl(item) {
   return '';
 }
 
-function buildAnalyticsBuckets(rows, hasTwoRoutes = true) {
+function buildAnalyticsBuckets(rows) {
   const groups = [
-    ['до 60 мин', (row, key) => row[key] <= 60],
-    ['60-90 мин', (row, key) => row[key] > 60 && row[key] <= 90],
-    ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
-    ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
+    ['до 60 мин', (value) => value <= 60],
+    ['60-90 мин', (value) => value > 60 && value <= 90],
+    ['90-120 мин', (value) => value > 90 && value <= 120],
+    ['больше 120 мин', (value) => value > 120 && Number.isFinite(value)],
   ];
-  const keys = hasTwoRoutes
-    ? [['Адрес', 'olya'], ['Второй адрес', 'nikita'], ['Оба маршрута', 'both']]
-    : [['Адрес', 'olya']];
+  const routeLabels = collectAnalyticsRouteLabels(rows);
+  const keys = routeLabels.map((label, index) => [label, index]);
+  if (routeLabels.length > 1) keys.push(['Все адреса', 'all']);
   const result = [];
   groups.forEach((group) => {
     keys.forEach((key) => {
       const list = key[1] === 'both'
-        ? rows.filter((row) => group[1](row, 'olya') && group[1](row, 'nikita'))
-        : rows.filter((row) => group[1](row, key[1]));
+        ? []
+        : key[1] === 'all'
+          ? rows.filter((row) => {
+            const minutes = routeMinutes(row);
+            return minutes.length > 0 && minutes.every((value) => group[1](value));
+          })
+          : rows.filter((row) => group[1](row.routes?.[key[1]]?.minutes));
       result.push({
         group: group[0],
         route: key[0],
@@ -893,7 +961,7 @@ function buildAnalyticsBuckets(rows, hasTwoRoutes = true) {
   return result;
 }
 
-function buildAnalyticsCategories(rows, hasTwoRoutes = true) {
+function buildAnalyticsCategories(rows) {
   const categories = [];
   const addCategoryRows = (title, field) => {
     [...new Set(rows.map((row) => row[field]))].sort((a, b) => String(a).localeCompare(String(b), 'ru')).forEach((name) => {
@@ -909,7 +977,7 @@ function buildAnalyticsCategories(rows, hasTwoRoutes = true) {
       });
     });
   };
-  if (hasTwoRoutes) addCategoryRows('Баланс', 'balanceType');
+  if (Math.max(0, ...rows.map((row) => row.routes?.length || 0)) > 1) addCategoryRows('Баланс', 'balanceType');
   addCategoryRows('Стартовый платёж', 'moveInCostCategory');
   return categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count);
 }
@@ -1196,14 +1264,11 @@ async function handleAnalyticsRun(req, res) {
   const timeKeys = Array.isArray(payload?.timeKeys) && payload.timeKeys.length
     ? payload.timeKeys.filter(Boolean)
     : detectAnalyticsTimeKeys(items);
-  const olyaKey = chooseAnalyticsKey(payload?.olyaKey, timeKeys, /commutework|оли|ol/i);
-  const nikitaKey = chooseSecondAnalyticsKey(payload?.nikitaKey, timeKeys, olyaKey, /commutehome|родина|никит|nik/i);
-  const analytics = buildAnalyticsView(items, { olyaKey, nikitaKey, fastLimit, timeKeys });
+  const analytics = buildAnalyticsView(items, { fastLimit, timeKeys });
 
   jsonResponse(res, 200, {
     ok: true,
     timeKeys: analytics.timeKeys,
-    selectedKeys: { olyaKey: analytics.olyaKey, nikitaKey: analytics.nikitaKey },
     fastLimit: analytics.fastLimit,
     updatedAt: saved?.updatedAt || null,
     activeId: saved?.activeId || null,
@@ -3186,8 +3251,6 @@ const analyticsPage = String.raw`<!doctype html>
       </nav>
       <label class="field" hidden>Сохранённый список <select id="savedListSelect"></select></label>
       <label class="field" hidden>Порог быстрых вариантов, мин <input id="fastLimit" type="number" min="10" max="300" step="5" value="90"></label>
-      <label class="field" hidden>Поле адреса <select id="olyaKey"></select></label>
-      <label class="field" hidden>Поле второго адреса <select id="nikitaKey"></select></label>
       <button id="loadSavedBtn" class="action-btn" type="button" hidden>Показать сохранённые списки</button>
       <span id="savedListInfo" class="saved-list-info" hidden>API: 0 списков</span>
       <button id="imageButton" class="action-btn" type="button" hidden>Фото объявлений</button>
@@ -3267,12 +3330,8 @@ const analyticsPage = String.raw`<!doctype html>
 
     <section class="grid analytics-section hidden" id="fastSection">
       <section class="panel">
-        <div class="panel-head"><div class="panel-title" id="olyaTitle">Быстрее всего до адреса</div><div id="olyaAvg" class="status"></div></div>
-        <div class="panel-body" id="olyaTable"></div>
-      </section>
-      <section class="panel" id="nikitaPanel">
-        <div class="panel-head"><div class="panel-title" id="nikitaTitle">Быстрее всего до второго адреса</div><div id="nikitaAvg" class="status"></div></div>
-        <div class="panel-body" id="nikitaTable"></div>
+        <div class="panel-head"><div class="panel-title" id="fastestTitle">Самые быстрые</div><div id="fastestAvg" class="status"></div></div>
+        <div class="panel-body" id="fastestTable"></div>
       </section>
     </section>
 
@@ -3366,8 +3425,6 @@ const analyticsPage = String.raw`<!doctype html>
       jsonInput: document.querySelector('#jsonInput'),
       analyzeBtn: document.querySelector('#analyzeBtn'),
       fastLimit: document.querySelector('#fastLimit'),
-      olyaKey: document.querySelector('#olyaKey'),
-      nikitaKey: document.querySelector('#nikitaKey'),
       stage: document.querySelector('#stage'),
       status: document.querySelector('#status'),
       imageButton: document.querySelector('#imageButton'),
@@ -3381,8 +3438,7 @@ const analyticsPage = String.raw`<!doctype html>
       insights: document.querySelector('#insights'),
       cheapTable: document.querySelector('#cheapTable'),
       expensiveTable: document.querySelector('#expensiveTable'),
-      olyaTable: document.querySelector('#olyaTable'),
-      nikitaTable: document.querySelector('#nikitaTable'),
+      fastestTable: document.querySelector('#fastestTable'),
       balancedTable: document.querySelector('#balancedTable'),
       bucketsTable: document.querySelector('#bucketsTable'),
       scoreTable: document.querySelector('#scoreTable'),
@@ -3402,11 +3458,8 @@ const analyticsPage = String.raw`<!doctype html>
       commuteIssuesStatus: document.querySelector('#commuteIssuesStatus'),
       commuteIssuesCount: document.querySelector('#commuteIssuesCount'),
       downloadCommuteIssuesBtn: document.querySelector('#downloadCommuteIssuesBtn'),
-      olyaAvg: document.querySelector('#olyaAvg'),
-      olyaTitle: document.querySelector('#olyaTitle'),
-      nikitaPanel: document.querySelector('#nikitaPanel'),
-      nikitaAvg: document.querySelector('#nikitaAvg'),
-      nikitaTitle: document.querySelector('#nikitaTitle'),
+      fastestAvg: document.querySelector('#fastestAvg'),
+      fastestTitle: document.querySelector('#fastestTitle'),
       balancedAvg: document.querySelector('#balancedAvg'),
       scoreAvg: document.querySelector('#scoreAvg'),
       startAvg: document.querySelector('#startAvg'),
@@ -3426,8 +3479,7 @@ const analyticsPage = String.raw`<!doctype html>
     const tableTitles = {
       cheap: 'Все самые дешёвые варианты',
       expensive: 'Все самые дорогие варианты',
-      olya: 'Все варианты по времени до адреса',
-      nikita: 'Все варианты по времени до второго адреса',
+      fastest: 'Все самые быстрые варианты',
       balanced: 'Все варианты золотой середины',
       score: 'Все варианты по среднему времени',
       start: 'Все варианты по стоимости заселения',
@@ -3486,10 +3538,102 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function minutesText(value) {
-      if (!Number.isFinite(value)) return 'нет';
+      if (!Number.isFinite(value)) return 'нет данных';
       const hours = Math.floor(value / 60);
       const minutes = value % 60;
       return (hours ? hours + ' ч ' : '') + minutes + ' мин';
+    }
+
+    function isAnalyticsRouteKey(key) {
+      return /время|маршрут|дорог|путь|работ|родин|commute|time|route|avgcommute|maxcommute/i.test(String(key || ''));
+    }
+
+    function normalizeAddressTimeKeys(item) {
+      if (!Array.isArray(item?.addresses)) return [];
+      return item.addresses
+        .map((address, index) => {
+          const value = address?.commuteTime ?? address?.time ?? address?.duration;
+          return Number.isFinite(parseTime(value)) ? 'addresses.' + index + '.commuteTime' : null;
+        })
+        .filter(Boolean);
+    }
+
+    function getAnalyticsRouteValue(item, key) {
+      const addressMatch = String(key || '').match(/^addresses\.(\d+)\.commuteTime$/);
+      if (addressMatch) {
+        const address = item?.addresses?.[Number(addressMatch[1])];
+        return address?.commuteTime ?? address?.time ?? address?.duration;
+      }
+      return item?.[key];
+    }
+
+    function getAnalyticsRoutes(item, routeKeys = []) {
+      if (Array.isArray(item?.addresses) && item.addresses.length) {
+        return item.addresses
+          .map((address, index) => {
+            const rawTime = address?.commuteTime ?? address?.time ?? address?.duration ?? '';
+            const name = String(address?.name || '').trim() || 'адрес ' + (index + 1);
+            return {
+              name,
+              coords: Array.isArray(address?.coords) ? address.coords : [],
+              commuteTime: String(rawTime || '').trim(),
+              minutes: parseTime(rawTime),
+            };
+          })
+          .filter((route) => route.name || route.commuteTime || route.coords.length);
+      }
+
+      return routeKeys
+        .map((key, index) => {
+          const rawTime = getAnalyticsRouteValue(item, key);
+          return {
+            name: index === 0 ? 'адрес' : 'адрес ' + (index + 1),
+            coords: [],
+            commuteTime: String(rawTime || '').trim(),
+            minutes: parseTime(rawTime),
+          };
+        })
+        .filter((route) => Number.isFinite(route.minutes) || route.commuteTime);
+    }
+
+    function collectAnalyticsRouteLabels(rows) {
+      const maxRoutes = Math.max(0, ...rows.map((row) => Array.isArray(row.routes) ? row.routes.length : 0));
+      return Array.from({ length: maxRoutes }, (_, index) => {
+        const route = rows.map((row) => row.routes?.[index]).find((entry) => entry?.name);
+        return route?.name || 'адрес ' + (index + 1);
+      });
+    }
+
+    function routeMinutes(row) {
+      return (Array.isArray(row?.routes) ? row.routes : [])
+        .map((route) => Number(route?.minutes))
+        .filter(Number.isFinite);
+    }
+
+    function routeAverage(row) {
+      const minutes = routeMinutes(row);
+      return minutes.length ? average(minutes) : Infinity;
+    }
+
+    function routeMax(row) {
+      const minutes = routeMinutes(row);
+      return minutes.length ? Math.max(...minutes) : Infinity;
+    }
+
+    function routeDiff(row) {
+      const minutes = routeMinutes(row);
+      return minutes.length > 1 ? Math.max(...minutes) - Math.min(...minutes) : 0;
+    }
+
+    function routeBalanceType(row) {
+      const minutes = routeMinutes(row);
+      if (minutes.length < 2) return 'один адрес';
+      const diff = Math.max(...minutes) - Math.min(...minutes);
+      if (diff === 0) return 'одинаково';
+      if (diff <= 15) return 'почти одинаково';
+      if (diff <= 30) return 'разница 16-30 мин';
+      if (diff <= 60) return 'разница 31-60 мин';
+      return 'разница больше 60 мин';
     }
 
     function pluralizeRu(count, one, few, many) {
@@ -3925,17 +4069,6 @@ const analyticsPage = String.raw`<!doctype html>
       return 'дорогой вход';
     }
 
-    function balanceType(olya, nikita) {
-      if (!Number.isFinite(olya) || !Number.isFinite(nikita)) return 'нет данных';
-      const diff = Math.abs(olya - nikita);
-      if (diff === 0) return 'одинаково';
-      const side = olya < nikita ? 'первый адрес быстрее' : 'второй адрес быстрее';
-      if (diff <= 15) return 'почти одинаково, ' + side;
-      if (diff <= 30) return 'разница 16-30 мин, ' + side;
-      if (diff <= 60) return 'разница 31-60 мин, ' + side;
-      return 'разница больше 60 мин, ' + side;
-    }
-
     function getPeriodLabel(rows) {
       return 'за месяц';
     }
@@ -3949,12 +4082,15 @@ const analyticsPage = String.raw`<!doctype html>
       ]);
       const keys = [];
       items.slice(0, 80).forEach((item) => {
+        normalizeAddressTimeKeys(item).forEach((key) => {
+          if (!keys.includes(key)) keys.push(key);
+        });
         Object.keys(item || {}).forEach((key) => {
           const lower = key.toLowerCase();
           if (ignored.has(lower) || keys.includes(key)) return;
           const value = item[key];
           const text = String(value ?? '').toLowerCase();
-          const looksLikeRoute = /время|маршрут|дорог|путь|работ|родин|оли|никит|commute|time|route/.test(lower);
+          const looksLikeRoute = isAnalyticsRouteKey(lower);
           const looksLikeDuration = /(\d+\s*(ч|час|мин|м\b|h|min))/.test(text);
           if ((looksLikeRoute || looksLikeDuration) && Number.isFinite(parseTime(value))) {
             if (typeof value === 'number' && !looksLikeRoute) return;
@@ -4012,9 +4148,6 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function prepareRows() {
-      const olyaKey = els.olyaKey.value;
-      const nikitaKey = els.nikitaKey.value;
-      const hasTwoRoutes = Boolean(olyaKey && nikitaKey && olyaKey !== nikitaKey);
       const baseRows = state.items.map((item, index) => {
         const rent = getRent(item);
         const months = getMonths(item);
@@ -4022,13 +4155,11 @@ const analyticsPage = String.raw`<!doctype html>
         const area = parseArea(item);
         const rooms = parseRooms(item);
         const floorInfo = parseFloorInfo(item);
-        const olya = parseTime(item[olyaKey]);
-        const nikita = hasTwoRoutes ? parseTime(item[nikitaKey]) : Infinity;
-        const avgCommute = hasTwoRoutes
-          ? (Number.isFinite(olya) && Number.isFinite(nikita) ? (olya + nikita) / 2 : Infinity)
-          : olya;
-        const maxCommute = hasTwoRoutes ? Math.max(olya, nikita) : olya;
-        const diffTime = hasTwoRoutes ? Math.abs(olya - nikita) : Infinity;
+        const routes = getAnalyticsRoutes(item, state.timeKeys);
+        const routeStatsRow = { routes };
+        const avgCommute = routeAverage(routeStatsRow);
+        const maxCommute = routeMax(routeStatsRow);
+        const diffTime = routeDiff(routeStatsRow);
         const commission = getCommission(item);
         const deposit = getDeposit(item);
         const startPayment = rent + commission + deposit;
@@ -4041,8 +4172,8 @@ const analyticsPage = String.raw`<!doctype html>
           floorCategory: floorInfo.category, areaCategory: areaCategory(area),
           commission, deposit, startPayment, overpaymentPercent: rent ? startPayment / rent * 100 : 0,
           moveInCostCategory: moveInCategory(startPayment, rent),
-          priceM2, dailyRent, rubPerCommuteMin, olya, nikita, avgCommute, maxCommute, diffTime,
-          balanceType: balanceType(olya, nikita),
+          priceM2, dailyRent, rubPerCommuteMin, routes, avgCommute, maxCommute, diffTime,
+          balanceType: routeBalanceType(routeStatsRow),
         };
       }).filter((row) => row.rent > 0);
       const ranges = {
@@ -4093,74 +4224,39 @@ const analyticsPage = String.raw`<!doctype html>
       els.stage.className = 'stage' + (tone === 'info' ? '' : ' ' + tone);
     }
 
-    function routeFieldLabel(key, fallbackIndex = 0) {
-      const text = String(key || '').toLowerCase();
-      if (/родина|никит|nik/.test(text) || fallbackIndex === 1) return 'адрес 2';
-      return 'адрес';
-    }
-
     function displayItemsJson(items) {
-      const routeLabels = new Map(state.timeKeys.map((key, index) => [key, routeFieldLabel(key, index)]));
-      const visibleItems = (Array.isArray(items) ? items : []).map((item) => {
-        const visible = {};
-        Object.entries(item || {}).forEach(([key, value]) => {
-          visible[routeLabels.get(key) || key] = value;
-        });
-        return visible;
-      });
-      return JSON.stringify(visibleItems, null, 2);
-    }
-
-    function fillTimeSelects() {
-      const options = state.timeKeys.map((key, index) => '<option value="' + esc(key) + '">' + esc(routeFieldLabel(key, index)) + '</option>').join('');
-      els.olyaKey.innerHTML = options;
-      els.nikitaKey.innerHTML = '<option value="">Нет второго адреса</option>' + options;
-      const olya = state.timeKeys.find((key) => /commutework|оли|ol/i.test(key)) || state.timeKeys[0] || '';
-      const nikita = state.timeKeys.find((key) => key !== olya && /commutehome|родина|никит|nik/i.test(key)) || '';
-      els.olyaKey.value = olya;
-      els.nikitaKey.value = nikita;
+      return JSON.stringify(Array.isArray(items) ? items : [], null, 2);
     }
 
     function renderMetrics() {
       const rents = state.rows.map((row) => row.rent);
       const totals = state.rows.map((row) => row.total);
       const startPayments = state.rows.map((row) => row.startPayment);
-      const olyaTimes = state.rows.map((row) => row.olya);
-      const nikitaTimes = state.rows.map((row) => row.nikita);
       const avgTimes = state.rows.map((row) => row.avgCommute);
       const diffTimes = state.rows.map((row) => row.diffTime);
       const rubPerMinute = state.rows.map((row) => row.rubPerCommuteMin).filter(Boolean);
       const fastLimit = Number(els.fastLimit.value || 90);
-      const periodLabel = getPeriodLabel(state.rows);
       const midRange = state.rows.filter((row) => row.avgCommute >= 60 && row.avgCommute <= 90);
       const midRangeRentMedian = median(midRange.map((row) => row.rent));
       const midRangeTotalMedian = median(midRange.map((row) => row.total));
-      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
-      const hasTwoRoutes = routeKeys.length > 1;
-      const fastBoth = hasTwoRoutes
-        ? state.rows.filter((row) => row.olya <= fastLimit && row.nikita <= fastLimit)
-        : state.rows.filter((row) => row.olya <= fastLimit);
+      const fastRows = state.rows.filter((row) => {
+        const minutes = routeMinutes(row);
+        return minutes.length > 0 && minutes.every((value) => value <= fastLimit);
+      });
       const values = [
         ['Квартир в подборке', state.rows.length, 'варианты с распознанной ценой'],
         ['Средняя аренда', rub(average(rents)), 'средняя цена всех объектов'],
         ['Медианная аренда', rub(median(rents)), 'типичная цена рынка'],
         ['Минимум / максимум', rub(Math.min(...rents)) + ' / ' + rub(Math.max(...rents)), 'по месячной аренде'],
         ['Средний стартовый платёж', rub(average(startPayments)), '1 месяц + комиссия + залог'],
-        ['Среднее время в дороге', minutesText(Math.round(average(olyaTimes))), 'по всем квартирам с маршрутом'],
+        ['Среднее время в дороге', minutesText(Math.round(average(avgTimes))), 'по всем адресам в объявлении'],
       ];
 
-      if (hasTwoRoutes) {
-        values.push(
-          ['Среднее до второго адреса', minutesText(Math.round(average(nikitaTimes))), 'по всем квартирам с маршрутом'],
-          ['Среднее для двух адресов', minutesText(Math.round(average(avgTimes))), 'среднее двух маршрутов'],
-          ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'насколько отличаются маршруты'],
-        );
-      }
-
       values.push(
+        ['Разница между адресами', minutesText(Math.round(average(diffTimes))), 'разброс между маршрутами в одном объявлении'],
         ['Среднее ₽/мин пути', rubPerMinute.length ? rub(average(rubPerMinute)) : 'нет данных', 'аренда / среднее время'],
         ['Медиана ₽/мин пути', rubPerMinute.length ? rub(median(rubPerMinute)) : 'нет данных', 'типичное значение'],
-        [hasTwoRoutes ? 'Быстрые для двух адресов' : 'Быстрые по времени в дороге', fastBoth.length, hasTwoRoutes ? 'до ' + fastLimit + ' мин к каждому адресу' : 'до ' + fastLimit + ' мин до выбранного адреса'],
+        ['Быстрые по всем адресам', fastRows.length, 'до ' + fastLimit + ' мин к каждому адресу'],
         ['Медиана аренды 60-90 мин', midRange.length ? rub(midRangeRentMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', по средней аренде'],
         ['Медиана расходов 60-90 мин', midRange.length ? rub(midRangeTotalMedian) : 'нет данных', 'вариантов: ' + midRange.length + ', месячный итог'],
         ['Медиана расходов за месяц', rub(median(totals)), 'аренда + комиссия, без залога'],
@@ -4173,19 +4269,14 @@ const analyticsPage = String.raw`<!doctype html>
       const rows = state.rows;
       const cheapest = rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent)[0];
       const expensive = rows.slice().sort((a, b) => b.rent - a.rent)[0];
-      const quickestOlya = rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya)[0];
+      const quickest = rows.filter((row) => Number.isFinite(row.maxCommute)).sort((a, b) => a.maxCommute - b.maxCommute)[0];
       const balanced = rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute)[0];
       const blocks = [
         ['Самый дешёвый', cheapest ? rub(cheapest.total) + '<br>' + esc(cheapest.title) : 'нет данных'],
         ['Самый дорогой', expensive ? rub(expensive.rent) + '<br>' + esc(expensive.title) : 'нет данных'],
+        ['Самый быстрый по адресам', quickest ? minutesText(quickest.maxCommute) + '<br>' + rub(quickest.rent) : 'нет данных'],
+        ['Лучший баланс цены и дороги', balanced ? minutesText(Math.round(balanced.avgCommute)) + '<br>' + rub(balanced.rent) : 'нет данных'],
       ];
-      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
-      const hasTwoRoutes = routeKeys.length > 1;
-      blocks.push(['Самый быстрый до адреса', quickestOlya ? minutesText(quickestOlya.olya) + '<br>' + rub(quickestOlya.rent) : 'нет данных']);
-      blocks.push(hasTwoRoutes
-        ? ['Минимальная разница', balanced ? minutesText(balanced.olya) + ' / ' + minutesText(balanced.nikita) + '<br>разница ' + minutesText(balanced.diffTime) : 'нет данных']
-        : ['Лучший баланс цены и дороги', balanced ? minutesText(balanced.olya) + '<br>' + rub(balanced.rent) : 'нет данных']
-      );
       els.insights.innerHTML = blocks.map((block) => '<article class="insight"><b>' + esc(block[0]) + '</b><div>' + block[1] + '</div></article>').join('');
     }
 
@@ -4201,8 +4292,8 @@ const analyticsPage = String.raw`<!doctype html>
         row.deposit ? ['Залог', rub(row.deposit)] : null,
         row.commission ? ['Комиссия', rub(row.commission)] : null,
         row.utilities ? ['ЖКУ', rub(row.utilities)] : null,
-        (Number.isFinite(row.olya) || Number.isFinite(row.nikita))
-          ? ['Дорога', [Number.isFinite(row.olya) ? 'Адрес ' + minutesText(row.olya) : null, Number.isFinite(row.nikita) ? 'Второй адрес ' + minutesText(row.nikita) : null].filter(Boolean).join(' · ')]
+        Array.isArray(row.routes) && row.routes.length
+          ? ['Дорога', row.routes.map((route) => (route.name || 'адрес') + ' ' + routeTimeText(route)).join(' · ')]
           : null,
       ].filter(Boolean);
       const title = row.url
@@ -4236,6 +4327,27 @@ const analyticsPage = String.raw`<!doctype html>
       '</div>';
     }
 
+    function routeTimeText(route) {
+      if (!route) return 'нет данных';
+      if (route.commuteTime) return route.commuteTime;
+      return minutesText(route.minutes);
+    }
+
+    function routeTimeCell(row, routeIndex) {
+      const route = row.routes?.[routeIndex];
+      return '<span class="time">' + esc(routeTimeText(route)) + '</span>';
+    }
+
+    function buildRouteColumns(rows) {
+      const labels = state.analyticsView?.routeLabels?.length
+        ? state.analyticsView.routeLabels
+        : collectAnalyticsRouteLabels(rows || state.rows || []);
+      return labels.map((label, index) => ({
+        label,
+        render: (row) => routeTimeCell(row, index),
+      }));
+    }
+
     function renderTable(target, rows, columns, highlightCount = 0, options = {}) {
       if (!rows.length) {
         target.innerHTML = '<div class="empty">Нет данных для этого блока.</div>';
@@ -4261,19 +4373,15 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function renderTables() {
-      const periodLabel = getPeriodLabel(state.rows);
-      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
-      const hasTwoRoutes = routeKeys.length > 1;
       const baseColumns = [
         { label: 'Объект', render: listingCell },
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
-        { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        ...buildRouteColumns(state.rows),
       ];
       const cheap = state.rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       const expensive = state.rows.slice().sort((a, b) => b.rent - a.rent);
-      const olya = state.rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
-      const nikita = state.rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+      const fastest = state.rows.filter((row) => Number.isFinite(row.maxCommute)).sort((a, b) => a.maxCommute - b.maxCommute || a.rent - b.rent);
       const balanced = state.rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
       const score = state.rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
       const start = state.rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
@@ -4295,21 +4403,18 @@ const analyticsPage = String.raw`<!doctype html>
         { label: '₽/мин пути', render: (row) => '<span class="money">' + rub(row.rubPerCommuteMin) + '</span><div class="muted">аренда / ' + esc(minutesText(Math.round(row.avgCommute))) + '</div>' },
       ];
 
-      state.tableRows = { cheap, expensive, olya, nikita, balanced, score, start, minute };
-      state.tableColumns = { cheap: baseColumns, expensive: baseColumns, olya: baseColumns, nikita: baseColumns, balanced: balancedColumns, score: scoreColumns, start: startColumns, minute: minuteColumns };
-      state.tableHighlights = { cheap: 8, expensive: 8, olya: 10, nikita: 10, balanced: 10, score: 10, start: 10, minute: 10 };
+      state.tableRows = { cheap, expensive, fastest, balanced, score, start, minute };
+      state.tableColumns = { cheap: baseColumns, expensive: baseColumns, fastest: baseColumns, balanced: balancedColumns, score: scoreColumns, start: startColumns, minute: minuteColumns };
+      state.tableHighlights = { cheap: 8, expensive: 8, fastest: 10, balanced: 10, score: 10, start: 10, minute: 10 };
 
       renderTable(els.cheapTable, cheap, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap' });
       renderTable(els.expensiveTable, expensive, baseColumns, 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive' });
-      renderTable(els.olyaTable, olya, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'olya' });
-      els.nikitaPanel.hidden = !hasTwoRoutes;
-      if (hasTwoRoutes) renderTable(els.nikitaTable, nikita, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita' });
+      renderTable(els.fastestTable, fastest, baseColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'fastest' });
       renderTable(els.balancedTable, balanced, balancedColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced' });
       renderTable(els.scoreTable, score, scoreColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'score' });
       renderTable(els.startTable, start, startColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'start' });
       renderTable(els.minuteTable, minute, minuteColumns, 10, { limit: PREVIEW_LIMIT, tableKey: 'minute' });
-      els.olyaAvg.textContent = 'вариантов: ' + olya.length + ', средняя аренда: ' + rub(average(olya.map((row) => row.rent)));
-      if (hasTwoRoutes) els.nikitaAvg.textContent = 'вариантов: ' + nikita.length + ', средняя аренда: ' + rub(average(nikita.map((row) => row.rent)));
+      els.fastestAvg.textContent = 'вариантов: ' + fastest.length + ', средняя аренда: ' + rub(average(fastest.map((row) => row.rent)));
       els.balancedAvg.textContent = 'средняя аренда: ' + rub(average(balanced.map((row) => row.rent)));
       els.scoreAvg.textContent = 'оценка: среднее из числовых показателей';
       els.startAvg.textContent = 'средний вход: ' + rub(average(start.map((row) => row.startPayment)));
@@ -4318,22 +4423,23 @@ const analyticsPage = String.raw`<!doctype html>
 
     function renderBuckets() {
       const groups = [
-        ['до 60 мин', (row, key) => row[key] <= 60],
-        ['60-90 мин', (row, key) => row[key] > 60 && row[key] <= 90],
-        ['90-120 мин', (row, key) => row[key] > 90 && row[key] <= 120],
-        ['больше 120 мин', (row, key) => row[key] > 120 && Number.isFinite(row[key])],
+        ['до 60 мин', (value) => value <= 60],
+        ['60-90 мин', (value) => value > 60 && value <= 90],
+        ['90-120 мин', (value) => value > 90 && value <= 120],
+        ['больше 120 мин', (value) => value > 120 && Number.isFinite(value)],
       ];
-      const routeKeys = [...new Set([els.olyaKey.value, els.nikitaKey.value].filter(Boolean))];
-      const hasTwoRoutes = routeKeys.length > 1;
-      const keys = hasTwoRoutes
-        ? [['Адрес', 'olya'], ['Второй адрес', 'nikita'], ['Оба маршрута', 'both']]
-        : [['Адрес', 'olya']];
+      const routeLabels = collectAnalyticsRouteLabels(state.rows);
+      const keys = routeLabels.map((label, index) => [label, index]);
+      if (routeLabels.length > 1) keys.push(['Все адреса', 'all']);
       const rows = [];
       groups.forEach((group) => {
         keys.forEach((key) => {
-          const list = key[1] === 'both'
-            ? state.rows.filter((row) => group[1](row, 'olya') && group[1](row, 'nikita'))
-            : state.rows.filter((row) => group[1](row, key[1]));
+          const list = key[1] === 'all'
+            ? state.rows.filter((row) => {
+              const minutes = routeMinutes(row);
+              return minutes.length > 0 && minutes.every((value) => group[1](value));
+            })
+            : state.rows.filter((row) => group[1](row.routes?.[key[1]]?.minutes));
           rows.push({ group: group[0], route: key[0], count: list.length, avg: average(list.map((row) => row.rent)), median: median(list.map((row) => row.rent)) });
         });
       });
@@ -4360,7 +4466,7 @@ const analyticsPage = String.raw`<!doctype html>
           });
         });
       };
-      if (hasTwoRoutes) addCategoryRows('Баланс', 'balanceType');
+      if (Math.max(0, ...state.rows.map((row) => row.routes?.length || 0)) > 1) addCategoryRows('Баланс', 'balanceType');
       addCategoryRows('Стартовый платёж', 'moveInCostCategory');
       renderTable(els.categoryTable, categories.sort((a, b) => a.type.localeCompare(b.type, 'ru') || b.count - a.count), [
         { label: 'Тип', render: (row) => esc(row.type) },
@@ -4621,7 +4727,7 @@ const analyticsPage = String.raw`<!doctype html>
         els.metrics.innerHTML = '';
         els.insights.innerHTML = '';
         setFullViewVisible(false);
-        [els.cheapTable, els.expensiveTable, els.olyaTable, els.nikitaTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.startTable, els.minuteTable, els.categoryTable, els.commuteIssuesTable].forEach((el) => {
+        [els.cheapTable, els.expensiveTable, els.fastestTable, els.balancedTable, els.bucketsTable, els.scoreTable, els.startTable, els.minuteTable, els.categoryTable, els.commuteIssuesTable].forEach((el) => {
           el.innerHTML = '<div class="empty">Загрузи JSON и нажми “Построить”.</div>';
         });
         setStage(state.items.length ? 'JSON загружен' : 'Ожидание файла', state.items.length ? 'warn' : 'info');
@@ -4643,7 +4749,6 @@ const analyticsPage = String.raw`<!doctype html>
       const parsed = unwrapJson(JSON.parse(text));
       state.items = parsed;
       state.timeKeys = detectTimeKeys(parsed);
-      fillTimeSelects();
       prepareRows();
       setStage('Подсчёт аналитики', 'info');
       renderAll();
@@ -4708,7 +4813,6 @@ const analyticsPage = String.raw`<!doctype html>
         els.jsonInput.value = JSON.stringify(active.items || [], null, 2);
         state.items = active.items || [];
         state.timeKeys = detectTimeKeys(state.items);
-        fillTimeSelects();
         prepareRows();
         renderAll();
         const updatedText = active.updatedAt ? ' Обновлено: ' + new Date(active.updatedAt).toLocaleString('ru-RU') + '.' : '';
@@ -4768,21 +4872,18 @@ const analyticsPage = String.raw`<!doctype html>
     }
 
     function buildAnalyticsColumns(tableKey) {
-      const periodLabel = state.analyticsView?.periodLabel || 'за период';
-      const selectedKeys = state.analyticsView?.selectedKeys || { olyaKey: els.olyaKey.value, nikitaKey: els.nikitaKey.value };
-      const hasTwoRoutes = [...new Set([selectedKeys.olyaKey, selectedKeys.nikitaKey].filter(Boolean))].length > 1;
+      const sourceRows = state.tableRows?.[tableKey] || state.rows || [];
       const baseColumns = [
         { label: 'Объект', render: listingCell },
         { label: 'Аренда', render: (row) => '<span class="money">' + rub(row.rent) + '</span>' },
         { label: 'Итого в месяц', render: (row) => '<span class="money">' + rub(row.total) + '</span>' },
-        { label: 'До адреса', render: (row) => '<span class="time">' + minutesText(row.olya) + '</span>' },
+        ...buildRouteColumns(sourceRows),
       ];
 
       const tableColumns = {
         cheap: baseColumns,
         expensive: baseColumns,
-        olya: baseColumns,
-        nikita: baseColumns,
+        fastest: baseColumns,
         balanced: [...baseColumns, { label: 'Баланс', render: (row) => '<span class="badge">разница ' + minutesText(row.diffTime) + '</span>' }],
         score: [...baseColumns, { label: 'Оценка', render: (row) => '<span class="badge">' + row.finalScore + '/100 · ' + esc(row.grade) + '</span>' }],
         start: [...baseColumns, { label: 'Стартовый платёж', render: (row) => '<span class="money">' + rub(row.startPayment) + '</span><div class="muted">' + esc(row.moveInCostCategory) + '</div>' }],
@@ -4796,8 +4897,7 @@ const analyticsPage = String.raw`<!doctype html>
       const rows = state.rows || [];
       if (tableKey === 'cheap') return rows.slice().sort((a, b) => a.total - b.total || a.rent - b.rent);
       if (tableKey === 'expensive') return rows.slice().sort((a, b) => b.rent - a.rent);
-      if (tableKey === 'olya') return rows.filter((row) => Number.isFinite(row.olya)).sort((a, b) => a.olya - b.olya || a.rent - b.rent);
-      if (tableKey === 'nikita') return rows.filter((row) => Number.isFinite(row.nikita)).sort((a, b) => a.nikita - b.nikita || a.rent - b.rent);
+      if (tableKey === 'fastest') return rows.filter((row) => Number.isFinite(row.maxCommute)).sort((a, b) => a.maxCommute - b.maxCommute || a.rent - b.rent);
       if (tableKey === 'balanced') return rows.filter((row) => Number.isFinite(row.avgCommute)).sort((a, b) => a.diffTime - b.diffTime || a.avgCommute - b.avgCommute || a.rent - b.rent);
       if (tableKey === 'score') return rows.slice().sort((a, b) => b.finalScore - a.finalScore || a.rent - b.rent);
       if (tableKey === 'start') return rows.slice().sort((a, b) => a.startPayment - b.startPayment || a.rent - b.rent);
@@ -4814,20 +4914,12 @@ const analyticsPage = String.raw`<!doctype html>
       state.tableColumns = data?.tableColumns || {};
       state.tableHighlights = data?.tableHighlights || {};
 
-      if (Array.isArray(data?.timeKeys) && data.timeKeys.length) {
-        fillTimeSelects();
-        if (data.selectedKeys?.olyaKey) els.olyaKey.value = data.selectedKeys.olyaKey;
-        els.nikitaKey.value = data.selectedKeys?.nikitaKey || '';
-      }
-
       renderAll();
     }
 
     async function loadAnalyticsView(items, options = {}) {
       const payload = {
         timeKeys: state.timeKeys,
-        olyaKey: els.olyaKey.value,
-        nikitaKey: els.nikitaKey.value,
         fastLimit: Number(els.fastLimit.value || 90),
       };
       if (Array.isArray(items) && items.length) {
@@ -4862,14 +4954,10 @@ const analyticsPage = String.raw`<!doctype html>
 
     function renderTables() {
       if (!state.analyticsView) return;
-      const selectedKeys = state.analyticsView.selectedKeys || {};
-      const routeKeys = [...new Set([selectedKeys.olyaKey, selectedKeys.nikitaKey].filter(Boolean))];
-      const hasTwoRoutes = routeKeys.length > 1;
       const rows = {
         cheap: buildClientTableRows('cheap'),
         expensive: buildClientTableRows('expensive'),
-        olya: buildClientTableRows('olya'),
-        nikita: buildClientTableRows('nikita'),
+        fastest: buildClientTableRows('fastest'),
         balanced: buildClientTableRows('balanced'),
         score: buildClientTableRows('score'),
         value: buildClientTableRows('value'),
@@ -4880,29 +4968,20 @@ const analyticsPage = String.raw`<!doctype html>
         ...state.tableRows,
         cheap: rows.cheap.slice(0, PREVIEW_LIMIT),
         expensive: rows.expensive.slice(0, PREVIEW_LIMIT),
-        olya: rows.olya.slice(0, PREVIEW_LIMIT),
-        nikita: rows.nikita.slice(0, PREVIEW_LIMIT),
+        fastest: rows.fastest.slice(0, PREVIEW_LIMIT),
         balanced: rows.balanced.slice(0, PREVIEW_LIMIT),
         score: rows.score.slice(0, PREVIEW_LIMIT),
         start: rows.start.slice(0, PREVIEW_LIMIT),
         minute: rows.minute.slice(0, PREVIEW_LIMIT),
       };
-      els.olyaTitle.textContent = hasTwoRoutes ? 'Быстрее всего до первого адреса' : 'Быстрее всего до адреса';
-      els.nikitaPanel.hidden = !hasTwoRoutes;
       renderTable(els.cheapTable, rows.cheap || [], buildAnalyticsColumns('cheap'), 8, { limit: PREVIEW_LIMIT, tableKey: 'cheap', getRowClass });
       renderTable(els.expensiveTable, rows.expensive || [], buildAnalyticsColumns('expensive'), 8, { limit: PREVIEW_LIMIT, tableKey: 'expensive', getRowClass });
-      renderTable(els.olyaTable, rows.olya || [], buildAnalyticsColumns('olya'), 10, { limit: PREVIEW_LIMIT, tableKey: 'olya', getRowClass });
-      if (hasTwoRoutes) {
-        renderTable(els.nikitaTable, rows.nikita || [], buildAnalyticsColumns('nikita'), 10, { limit: PREVIEW_LIMIT, tableKey: 'nikita', getRowClass });
-      }
+      renderTable(els.fastestTable, rows.fastest || [], buildAnalyticsColumns('fastest'), 10, { limit: PREVIEW_LIMIT, tableKey: 'fastest', getRowClass });
       renderTable(els.balancedTable, rows.balanced || [], buildAnalyticsColumns('balanced'), 10, { limit: PREVIEW_LIMIT, tableKey: 'balanced', getRowClass });
       renderTable(els.scoreTable, rows.score || [], buildAnalyticsColumns('score'), 10, { limit: PREVIEW_LIMIT, tableKey: 'score', getRowClass });
       renderTable(els.startTable, rows.start || [], buildAnalyticsColumns('start'), 10, { limit: PREVIEW_LIMIT, tableKey: 'start', getRowClass });
       renderTable(els.minuteTable, rows.minute || [], buildAnalyticsColumns('minute'), 10, { limit: PREVIEW_LIMIT, tableKey: 'minute', getRowClass });
-      els.olyaAvg.textContent = 'вариантов: ' + (rows.olya || []).length + ', средняя аренда: ' + rub(average((rows.olya || []).map((row) => row.rent)));
-      if (hasTwoRoutes) {
-        els.nikitaAvg.textContent = 'вариантов: ' + (rows.nikita || []).length + ', средняя аренда: ' + rub(average((rows.nikita || []).map((row) => row.rent)));
-      }
+      els.fastestAvg.textContent = 'вариантов: ' + (rows.fastest || []).length + ', средняя аренда: ' + rub(average((rows.fastest || []).map((row) => row.rent)));
       els.balancedAvg.textContent = 'средняя аренда: ' + rub(average((rows.balanced || []).map((row) => row.rent)));
       els.scoreAvg.textContent = 'оценка: среднее из серверных расчётов';
       els.startAvg.textContent = 'средний вход: ' + rub(average((rows.start || []).map((row) => row.startPayment)));
@@ -5152,8 +5231,6 @@ const analyticsPage = String.raw`<!doctype html>
     els.downloadCommuteIssuesBtn.addEventListener('click', downloadCommuteIssuesJson);
     els.logoutBtn.addEventListener('click', () => { void logout(); });
     els.fastLimit.addEventListener('input', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
-    els.olyaKey.addEventListener('change', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
-    els.nikitaKey.addEventListener('change', () => { if (state.rows.length) { void loadAnalyticsView(state.items, state.items.length ? {} : { source: 'listings' }); } });
     document.addEventListener('click', (event) => {
       const favoriteButton = event.target.closest('.js-fav-toggle');
       if (favoriteButton) {
